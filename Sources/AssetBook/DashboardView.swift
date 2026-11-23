@@ -442,17 +442,22 @@ private struct CompositionCard: View {
         let previous: Double?
         let count: Int
         let category: AssetCategory?
+
+        var isLiabilityPart: Bool { category?.isLiability ?? false }
     }
 
     private var parts: [Part] {
         switch grouping {
         case .category:
-            return AssetCategory.allCases.filter { !$0.isLiability && !store.activeAccounts(in: $0).isEmpty }.map { c in
-                Part(id: c.rawValue, title: c.title, symbol: c.symbol, color: c.tint,
-                     value: max(store.total(c, in: snapshot), 0),
-                     previous: previous.map { store.total(c, in: $0) },
-                     count: store.activeAccounts(in: c).count, category: c)
+            // 負債也算一塊（以應繳金額計），佔比 = 總資產 ＋ 負債
+            return AssetCategory.allCases.filter { !store.activeAccounts(in: $0).isEmpty }.map { c in
+                let sign: Double = c.isLiability ? -1 : 1
+                return Part(id: c.rawValue, title: c.title, symbol: c.symbol, color: c.tint,
+                            value: max(sign * store.total(c, in: snapshot), 0),
+                            previous: previous.map { sign * store.total(c, in: $0) },
+                            count: store.activeAccounts(in: c).count, category: c)
             }
+            .filter { $0.value > 0 || !$0.isLiabilityPart }
         case .currency:
             return Currency.allCases.map { c in
                 Part(id: c.rawValue, title: c.name, symbol: currencySymbol(c), color: c.tint,
@@ -461,8 +466,18 @@ private struct CompositionCard: View {
                      count: store.activeAccounts.filter { $0.currency == c && !$0.category.isLiability }.count,
                      category: nil)
             }
-            .filter { $0.value > 0 }
+            .filter { $0.value > 0 } + liabilityPart
         }
+    }
+
+    /// 幣別分組時，負債併成一塊
+    private var liabilityPart: [Part] {
+        let c = AssetCategory.liability
+        let debt = -store.total(c, in: snapshot)
+        guard debt > 0 else { return [] }
+        return [Part(id: c.rawValue, title: c.title, symbol: c.symbol, color: c.tint, value: debt,
+                     previous: previous.map { -store.total(c, in: $0) },
+                     count: store.activeAccounts(in: c).count, category: c)]
     }
 
     private func currencySymbol(_ c: Currency) -> String {
@@ -476,6 +491,7 @@ private struct CompositionCard: View {
     var body: some View {
         let parts = parts
         let gross = max(parts.reduce(0) { $0 + $1.value }, 1)
+        let assets = parts.filter { !$0.isLiabilityPart }.reduce(0) { $0 + $1.value }
 
         Card {
             HStack(alignment: .center) {
@@ -496,11 +512,11 @@ private struct CompositionCard: View {
             // 寬螢幕：圓環在左、圖例在右；窄螢幕：上下排列
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 36) {
-                    donut(parts, gross: gross).frame(width: 230, height: 230)
+                    donut(parts, gross: gross, assets: assets).frame(width: 230, height: 230)
                     legend(parts, gross: gross).frame(minWidth: 340)
                 }
                 VStack(spacing: 22) {
-                    donut(parts, gross: gross).frame(width: 210, height: 210)
+                    donut(parts, gross: gross, assets: assets).frame(width: 210, height: 210)
                     legend(parts, gross: gross)
                 }
             }
@@ -517,7 +533,7 @@ private struct CompositionCard: View {
         }
     }
 
-    private func donut(_ parts: [Part], gross: Double) -> some View {
+    private func donut(_ parts: [Part], gross: Double, assets: Double) -> some View {
         let current = parts.first { $0.id == selected }
         return DonutChart(slices: parts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
                           selected: $selected, progress: appeared ? 1 : 0)
@@ -537,9 +553,9 @@ private struct CompositionCard: View {
                         Text("總資產")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
-                        CountingMoney(value: appeared ? gross : 0, hidden: store.hideAmounts)
+                        CountingMoney(value: appeared ? assets : 0, hidden: store.hideAmounts)
                             .font(.system(size: 22, weight: .regular))
-                        Text("\(parts.count) 個\(grouping == .category ? "分類" : "幣別")")
+                        Text("\(parts.filter { !$0.isLiabilityPart }.count) 個\(grouping == .category ? "分類" : "幣別")")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
