@@ -702,11 +702,14 @@ private struct DonutChart: View {
     @ViewBuilder private func segment(_ arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
         let isSelected = selected == arc.id
         let span = arc.end - arc.start
-        // 太小的一段放不下圓頭，改用平頭細線，至少看得到
-        let tiny = span <= gap * 1.3
-        let inset = tiny ? min(span * 0.15, 0.002) : gap / 2
-        let from = (arc.start + inset) * progress
-        let to = max((arc.end - inset) * progress, from)
+        // 圓頭線帽本身就佔一個線寬；放得下一顆圓點就用圓頭（短的段落縮成置中的圓點），
+        // 真的太小才改用平頭細線，至少看得到
+        let cap = gap * lineWidth / (lineWidth + 5)
+        let tiny = span < cap * 1.1
+        let mid = (arc.start + arc.end) / 2
+        let half = tiny ? max(span / 2 - min(span * 0.15, 0.002), 0) : max((span - gap) / 2, 0.0005)
+        let from = (mid - half) * progress
+        let to = max((mid + half) * progress, from)
         Circle()
             .trim(from: from, to: to)
             .stroke(arc.color,
