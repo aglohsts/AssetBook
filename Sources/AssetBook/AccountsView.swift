@@ -861,6 +861,8 @@ struct AmountEditor: View {
     let account: Account
     var target: Snapshot? = nil
     @State private var text = ""
+    /// 帳戶備註：跟金額一起改，按「儲存」時一起存
+    @State private var note = ""
 
     private var record: Snapshot? { target ?? store.latest }
     @FocusState private var focused: Bool
@@ -887,6 +889,15 @@ struct AmountEditor: View {
                     Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。"
                          : target == nil ? "會更新最新一筆紀錄中這個帳戶的數字。" : "會更新這一天紀錄中這個帳戶的數字。")
                 }
+
+                Section {
+                    TextField("備註", text: $note, prompt: Text("選填"), axis: .vertical)
+                        .lineLimit(1...4)
+                } header: {
+                    Text("備註")
+                } footer: {
+                    Text("帳戶的備註，所有紀錄共用。")
+                }
             }
             .formStyle(.grouped)
             .navigationTitle(account.name)
@@ -900,6 +911,7 @@ struct AmountEditor: View {
                 }
             }
             .onAppear {
+                note = store.account(id: account.id)?.note ?? account.note
                 if let v = record?.amounts[account.id] {
                     text = Fmt.number(v, digits: account.inputFractionDigits).replacingOccurrences(of: ",", with: "")
                 }
@@ -907,7 +919,7 @@ struct AmountEditor: View {
             }
         }
         #if os(macOS)
-        .frame(width: 380, height: 260)
+        .frame(width: 380, height: 360)
         #endif
     }
 
@@ -915,6 +927,11 @@ struct AmountEditor: View {
         guard var s = record, let v = Fmt.parse(text) else { return }
         s.amounts[account.id] = v
         store.save(s)
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if var a = store.account(id: account.id), a.note != trimmed {
+            a.note = trimmed
+            store.update(a)
+        }
         dismiss()
     }
 }
