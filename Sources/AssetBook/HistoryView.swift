@@ -274,6 +274,8 @@ struct SnapshotDetailView: View {
     /// 點進來時的那筆紀錄；畫面上顯示的是這一天在 store 裡最新的版本（修改後會馬上更新）
     let snapshot: Snapshot
     @State private var notTodayAlert = false
+    /// 點了今天紀錄中的某個帳戶：只改這一項
+    @State private var editingAccount: Account?
 
     /// 同一天的最新紀錄：手動記錄優先，其次自動估值點，都找不到才用點進來時的資料
     private var current: Snapshot {
@@ -324,7 +326,16 @@ struct SnapshotDetailView: View {
             ForEach(store.activeCategories) { cat in
                 Section {
                     ForEach(store.accounts(in: cat).filter { snapshot.amounts[$0.id] != nil || prev?.amounts[$0.id] != nil }) { a in
-                        AccountRow(account: a, snapshot: snapshot, previous: prev)
+                        if isToday {
+                            Button { edit(a) } label: {
+                                AccountRow(account: a, snapshot: snapshot, previous: prev)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(a.isPortfolio ? "修改持股（打開更新資產）" : "修改這一項")
+                        } else {
+                            AccountRow(account: a, snapshot: snapshot, previous: prev)
+                        }
                     }
                 } header: {
                     HStack {
@@ -340,8 +351,7 @@ struct SnapshotDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard isToday else { notTodayAlert = true; return }
-                    store.isUpdatingTodayOnly = true
-                    store.isUpdating = true
+                    openUpdateSheet()
                 } label: {
                     Label("修改", systemImage: "square.and.pencil")
                 }
@@ -349,10 +359,24 @@ struct SnapshotDetailView: View {
                 .help(isToday ? "修改今天的紀錄（⌘U）" : "只能修改今天的紀錄")
             }
         }
+        .sheet(item: $editingAccount) { a in
+            AmountEditor(account: a, target: current).environment(\.portfolio, store)
+        }
         .alert("只能修改今天的紀錄", isPresented: $notTodayAlert) {
             Button("好", role: .cancel) {}
         } message: {
             Text("這筆是 \(snapshot.date.formatted(.dateTime.month().day())) 的紀錄，過去的紀錄不能修改。")
         }
+    }
+
+    private func openUpdateSheet() {
+        store.isUpdatingTodayOnly = true
+        store.isUpdating = true
+    }
+
+    /// 點單一項目：一般帳戶只改這一項的金額；持股帳戶要改股數，改用完整的更新畫面
+    private func edit(_ account: Account) {
+        guard isToday else { notTodayAlert = true; return }
+        if account.isPortfolio { openUpdateSheet() } else { editingAccount = account }
     }
 }

@@ -819,12 +819,16 @@ struct AccountDetailView: View {
 
 // MARK: - 修改最新一筆紀錄中的金額
 
-/// 直接修改某帳戶在最新紀錄中的金額（帳單、餘額或持有數量），不必走完整的更新流程
+/// 直接修改某帳戶在某一筆紀錄中的金額（帳單、餘額或持有數量），不必走完整的更新流程。
+/// 沒指定紀錄時改最新一筆（帳戶頁）；歷史紀錄裡改今天那筆時會傳入那一天的紀錄
 struct AmountEditor: View {
     @Environment(\.portfolio) private var store
     @Environment(\.dismiss) private var dismiss
     let account: Account
+    var target: Snapshot? = nil
     @State private var text = ""
+
+    private var record: Snapshot? { target ?? store.latest }
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -842,11 +846,12 @@ struct AmountEditor: View {
                         Text(account.inputUnit).foregroundStyle(.secondary)
                     }
                 } header: {
-                    if let d = store.latest?.date {
+                    if let d = record?.date {
                         Text("\(d.formatted(.dateTime.year().month().day())) 的紀錄")
                     }
                 } footer: {
-                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。" : "會更新最新一筆紀錄中這個帳戶的數字。")
+                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。"
+                         : target == nil ? "會更新最新一筆紀錄中這個帳戶的數字。" : "會更新這一天紀錄中這個帳戶的數字。")
                 }
             }
             .formStyle(.grouped)
@@ -861,7 +866,7 @@ struct AmountEditor: View {
                 }
             }
             .onAppear {
-                if let v = store.latest?.amounts[account.id] {
+                if let v = record?.amounts[account.id] {
                     text = Fmt.number(v, digits: account.inputFractionDigits).replacingOccurrences(of: ",", with: "")
                 }
                 focused = true
@@ -873,7 +878,7 @@ struct AmountEditor: View {
     }
 
     private func save() {
-        guard var s = store.latest, let v = Fmt.parse(text) else { return }
+        guard var s = record, let v = Fmt.parse(text) else { return }
         s.amounts[account.id] = v
         store.save(s)
         dismiss()
