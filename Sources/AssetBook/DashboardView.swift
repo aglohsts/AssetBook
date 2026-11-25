@@ -449,7 +449,7 @@ private struct CompositionCard: View {
     private var parts: [Part] {
         switch grouping {
         case .category:
-            // 負債也算一塊（以應繳金額計），佔比 = 總資產 ＋ 負債
+            // 資產各類的佔比以總資產為 100%；負債另外列出（以應繳金額計），從總資產扣掉就是淨資產
             return AssetCategory.allCases.filter { !store.activeAccounts(in: $0).isEmpty }.map { c in
                 let sign: Double = c.isLiability ? -1 : 1
                 return Part(id: c.rawValue, title: c.title, symbol: c.symbol, color: c.tint,
@@ -490,9 +490,11 @@ private struct CompositionCard: View {
     }
 
     var body: some View {
-        let parts = parts
-        let gross = max(parts.reduce(0) { $0 + $1.value }, 1)
-        let assets = parts.filter { !$0.isLiabilityPart }.reduce(0) { $0 + $1.value }
+        let all = parts
+        let assetParts = all.filter { !$0.isLiabilityPart }
+        let debtPart = all.first { $0.isLiabilityPart }
+        let assets = assetParts.reduce(0) { $0 + $1.value }
+        let debt = debtPart?.value ?? 0
 
         Card {
             HStack(alignment: .center) {
@@ -513,12 +515,12 @@ private struct CompositionCard: View {
             // 寬螢幕：圓環在左、圖例在右；窄螢幕：上下排列
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 36) {
-                    donut(parts, gross: gross, assets: assets).frame(width: 230, height: 230)
-                    legend(parts, gross: gross).frame(minWidth: 340)
+                    donut(assetParts, debtPart: debtPart, assets: assets, debt: debt).frame(width: 230, height: 230)
+                    legend(assetParts, debtPart: debtPart, assets: assets).frame(minWidth: 340)
                 }
                 VStack(spacing: 22) {
-                    donut(parts, gross: gross, assets: assets).frame(width: 210, height: 210)
-                    legend(parts, gross: gross)
+                    donut(assetParts, debtPart: debtPart, assets: assets, debt: debt).frame(width: 210, height: 210)
+                    legend(assetParts, debtPart: debtPart, assets: assets)
                 }
             }
             .padding(.top, 4)
@@ -534,50 +536,68 @@ private struct CompositionCard: View {
         }
     }
 
-    private func donut(_ parts: [Part], gross: Double, assets: Double) -> some View {
-        let current = parts.first { $0.id == selected }
-        return DonutChart(slices: parts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
+    /// 外圈是資產組成（合計 100%）；負債畫成內側的細紅環，長度 = 負債佔總資產的比例。
+    /// 中間預設顯示淨資產（總資產 − 負債）
+    private func donut(_ assetParts: [Part], debtPart: Part?, assets: Double, debt: Double) -> some View {
+        let total = max(assets, 1)
+        let current = (assetParts + [debtPart].compactMap { $0 }).first { $0.id == selected }
+        return DonutChart(slices: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
                           selected: $selected, progress: appeared ? 1 : 0)
+            .overlay {
+                if let debtPart {
+                    DebtRing(fraction: min(debt / total, 1) * (appeared ? 1 : 0), color: debtPart.color,
+                             isDimmed: selected != nil && selected != debtPart.id,
+                             isSelected: selected == debtPart.id)
+                }
+            }
             .overlay {
                 VStack(spacing: 3) {
                     if let current {
+                        let isDebt = current.isLiabilityPart
                         Text(current.title)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
-                        CountingMoney(value: current.value, hidden: store.hideAmounts)
+                        CountingMoney(value: isDebt ? -current.value : current.value, hidden: store.hideAmounts)
                             .font(.system(size: 22, weight: .regular))
-                        Text((current.value / gross).formatted(.percent.precision(.fractionLength(1))))
+                        Text((isDebt ? "佔總資產 −" : "") + (current.value / total).formatted(.percent.precision(.fractionLength(1))))
                             .font(.subheadline)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("總資產")
+                        Text(debt > 0 ? "淨資產" : "總資產")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
-                        CountingMoney(value: appeared ? assets : 0, hidden: store.hideAmounts)
+                        CountingMoney(value: appeared ? assets - debt : 0, hidden: store.hideAmounts)
                             .font(.system(size: 22, weight: .regular))
-                        Text("\(parts.filter { !$0.isLiabilityPart }.count) 個\(grouping == .category ? "分類" : "幣別")")
+                        Text(debt > 0 ? "總資產 − 負債" : "\(assetParts.count) 個\(grouping == .category ? "分類" : "幣別")")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                .padding(.horizontal, 46)
+                // 內側還有一圈負債細環，文字再往內縮，避免碰到
+                .padding(.horizontal, 56)
                 .allowsHitTesting(false)
                 .animation(.snappy(duration: 0.25), value: selected)
             }
     }
 
-    private func legend(_ parts: [Part], gross: Double) -> some View {
-        VStack(spacing: 4) {
-            ForEach(parts) { p in
-                legendRow(p, share: p.value / gross)
+    /// 資產各類以總資產為 100%；負債放在分隔線下，以負數顯示（佔總資產多少要扣掉）
+    private func legend(_ assetParts: [Part], debtPart: Part?, assets: Double) -> some View {
+        let total = max(assets, 1)
+        return VStack(spacing: 4) {
+            ForEach(assetParts) { p in
+                legendRow(p, share: p.value / total)
+            }
+            if let debtPart {
+                Divider().padding(.horizontal, 12)
+                legendRow(debtPart, share: debtPart.value / total, isDeduction: true)
             }
         }
     }
 
-    private func legendRow(_ p: Part, share: Double) -> some View {
+    private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
         let isSelected = selected == p.id
         let row = VStack(spacing: 8) {
             HStack(spacing: 12) {
@@ -589,12 +609,17 @@ private struct CompositionCard: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 1) {
-                    MoneyText(value: p.value).font(.subheadline.weight(.medium))
+                    MoneyText(value: isDeduction ? -p.value : p.value).font(.subheadline.weight(.medium))
                     HStack(spacing: 8) {
                         if let old = p.previous {
-                            DeltaText(delta: p.value - old, base: old, showPercentOnly: true)
+                            // 負債以「對淨資產的影響」上色：負債變少是好事
+                            if isDeduction {
+                                DeltaText(delta: old - p.value, base: old, showPercentOnly: true)
+                            } else {
+                                DeltaText(delta: p.value - old, base: old, showPercentOnly: true)
+                            }
                         }
-                        Text(share.formatted(.percent.precision(.fractionLength(0))))
+                        Text((isDeduction ? "−" : "") + share.formatted(.percent.precision(.fractionLength(0))))
                             .foregroundStyle(.secondary)
                     }
                     .font(.caption)
@@ -610,7 +635,7 @@ private struct CompositionCard: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.06))
                     Capsule().fill(p.color)
-                        .frame(width: max(geo.size.width * share * (appeared ? 1 : 0), appeared ? 4 : 0))
+                        .frame(width: max(geo.size.width * min(share, 1) * (appeared ? 1 : 0), appeared ? 4 : 0))
                 }
             }
             .frame(height: 4)
@@ -634,6 +659,37 @@ private struct CompositionCard: View {
                 row
             }
         }
+    }
+}
+
+/// 圓環內側的細環：負債佔總資產的比例（最多一整圈）
+private struct DebtRing: View {
+    let fraction: Double
+    let color: Color
+    var isDimmed = false
+    var isSelected = false
+    private let outerWidth: CGFloat = 26
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            // 跟 DonutChart 的外圈半徑一致，再往內縮一點
+            let radius = (side - outerWidth - 18) / 2 - outerWidth / 2 - 9
+            let width: CGFloat = isSelected ? 8 : 5
+            ZStack {
+                Circle().stroke(color.opacity(0.12), lineWidth: width)
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: radius * 2, height: radius * 2)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .opacity(isDimmed ? 0.28 : 1)
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.6), value: fraction)
+        .animation(.easeOut(duration: 0.2), value: isSelected)
     }
 }
 
