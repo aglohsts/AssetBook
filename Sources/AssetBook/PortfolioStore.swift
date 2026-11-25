@@ -364,6 +364,113 @@ final class PortfolioStore {
         update(a)
     }
 
+    // MARK: 結帳日與繳費日
+
+    /// 和這個帳戶共用結帳日、繳費日的帳戶（同銀行、都選擇共用的使用中負債帳戶，包含自己）
+    func billGroup(for account: Account) -> [Account] {
+        guard account.sharesBillDates, let bank = account.bankDomain else { return [account] }
+        let members = activeAccounts(in: .liability).filter { $0.sharesBillDates && $0.bankDomain == bank }
+        return members.contains { $0.id == account.id } ? members : [account] + members
+    }
+
+    /// 一組帳戶共用的日期：成員中最近設定的那一個（日期最晚的）
+    func groupBillDate(_ kind: BillEvent.Kind, for account: Account) -> BillDate? {
+        billGroup(for: account).compactMap { $0.billDate(kind) }.max { $0.date < $1.date }
+    }
+
+    /// from 起 within 天內的結帳日、繳費日；同銀行共用日期的卡合成一筆
+    func billEvents(from: Date, within days: Int) -> [BillEvent] {
+        var seen = Set<UUID>()
+        var out: [BillEvent] = []
+        for a in activeAccounts(in: .liability) where !seen.contains(a.id) {
+            // 貸款：每月固定扣款
+            if a.isLoan {
+                seen.insert(a.id)
+                out += a.loanEvents(from: from, within: days)
+                continue
+            }
+            let group = billGroup(for: a)
+            group.forEach { seen.insert($0.id) }
+            // 用整組的日期算，代表帳戶選有設定日期的那一張
+            var rep = group.first { $0.dueDate != nil || $0.statementDate != nil } ?? a
+            rep.dueDate = groupBillDate(.due, for: a)
+            rep.statementDate = groupBillDate(.statement, for: a)
+            out += rep.billEvents(from: from, within: days).map { e in
+                var e = e
+                e.accounts = group
+                return e
+            }
+        }
+        return out.sorted { $0.date < $1.date }
+    }
+
+    /// 這一期繳費前要處理的事。信用卡：每個有要繳金額的幣別一件（台幣＝預約轉帳、外幣＝換匯），
+    /// 同銀行共用日期的卡一起算；貸款：預約轉帳有沒有設定到這一期
+    func paymentStatus(for event: BillEvent) -> PaymentStatus? {
+        guard event.kind == .due else { return nil }
+        let cal = Calendar.current
+        let group = event.accounts
+        if group.contains(where: { $0.autoDebit == true }) { return .autoDebit }
+        if event.account.isLoan {
+            let a = event.account
+            let until = a.paymentScheduledUntil
+            let done = until.map { cal.startOfDay(for: $0) >= event.date } ?? false
+            return .tasks([PaymentTask(currency: a.currency, done: done, scheduledUntil: until,
+                                       transferTo: a.paymentAccountID.flatMap { account(id: $0)?.name })])
+        }
+        // 最近一筆紀錄裡有要繳的卡（0、留空或退款的不用處理）
+        let owing = group.filter { (latest?.amounts[$0.id] ?? 0) > 0 }
+        if owing.isEmpty { return .nothingDue }
+        // 設定的那一期：日期之後若有微調（假日），前後 10 天內都算同一期
+        func doneThisPeriod(_ a: Account) -> Bool {
+            guard let d = a.paymentScheduledFor else { return false }
+            return abs(cal.dateComponents([.day], from: cal.startOfDay(for: d), to: event.date).day ?? 99) <= 10
+        }
+        let currencies = Currency.allCases.filter { c in owing.contains { $0.currency == c } }
+        return .tasks(currencies.map { c in
+            PaymentTask(currency: c, done: owing.filter { $0.currency == c }.allSatisfy(doneThisPeriod))
+        })
+    }
+
+    /// 貸款：預約轉帳設定到哪天、轉入哪個帳戶（until 為 nil 表示沒設定）
+    func setLoanTransfer(until: Date?, to transferAccount: UUID?, for accountID: UUID) {
+        guard let i = accounts.firstIndex(where: { $0.id == accountID }) else { return }
+        accounts[i].paymentScheduledUntil = until.map { Calendar.current.startOfDay(for: $0) }
+        accounts[i].paymentAccountID = until == nil ? nil : transferAccount
+        persist()
+    }
+
+    /// 設定自動扣款；同銀行共用日期的卡一起改（同一個扣款帳戶）
+    func setAutoDebit(_ on: Bool, for accountID: UUID) {
+        guard let base = account(id: accountID) else { return }
+        for member in billGroup(for: base) {
+            guard let i = accounts.firstIndex(where: { $0.id == member.id }) else { continue }
+            accounts[i].autoDebit = on ? true : nil
+        }
+        persist()
+    }
+
+    /// 勾選或取消這期的「已設定預約轉帳」（外幣是「已換匯」）；只改那個幣別的卡
+    func setPaymentDone(_ on: Bool, currency: Currency, for event: BillEvent) {
+        for member in event.accounts where member.currency == currency {
+            guard let i = accounts.firstIndex(where: { $0.id == member.id }) else { continue }
+            accounts[i].paymentScheduledFor = on ? event.date : nil
+        }
+        persist()
+    }
+
+    /// 確認或修改某一期的結帳日、繳費日（之後的月份會從這天帶入）；同銀行共用日期的卡一起改
+    func setBillDate(_ date: Date?, kind: BillEvent.Kind, for accountID: UUID) {
+        guard let base = account(id: accountID) else { return }
+        for member in billGroup(for: base) {
+            guard var a = account(id: member.id) else { continue }
+            let value = date.map(BillDate.init)
+            if kind == .due { a.dueDate = value } else { a.statementDate = value }
+            if let i = accounts.firstIndex(where: { $0.id == a.id }) { accounts[i] = a }
+        }
+        persist()
+    }
+
     func update(_ account: Account) {
         guard let i = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[i] = account

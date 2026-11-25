@@ -150,7 +150,31 @@ struct AccountsView: View {
             CategoryOverview(category: cat, snapshot: latest, previous: prev)
         }
 
-        if cat == .cash, !items.isEmpty {
+        if cat.isLiability, !items.isEmpty {
+            // 負債分成卡費、未出帳、貸款；同一組裡依銀行排在一起
+            Section {
+                ForEach(LiabilityGroup.allCases.filter { g in items.contains { $0.liabilityGroup == g } }) { g in
+                    let group = items.filter { $0.liabilityGroup == g }
+                        .sorted { ($0.bankName ?? $0.name, $0.name) < ($1.bankName ?? $1.name, $1.name) }
+                    LiabilityGroupRow(group: g, accounts: group, snapshot: latest, previous: prev)
+                    accountRows(group, latest: latest, prev: prev, indent: 48)
+                }
+                Button {
+                    adding = cat
+                } label: {
+                    Label(cat.addTitle, systemImage: "plus.circle.fill")
+                        .foregroundStyle(cat.tint)
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                if let prev {
+                    Text("右側漲跌為與 \(prev.date.formatted(.dateTime.month(.defaultDigits).day())) 相比")
+                        .textCase(nil)
+                }
+            } footer: {
+                Text("這期沒有帳單的卡，在「更新資產」時按「無帳單」即可，不必刪除。種類可在帳戶編輯裡改。")
+            }
+        } else if cat == .cash, !items.isEmpty {
             // 現金與存款分成子分類（銀行、交易所與穩定幣、現鈔與儲值）：
             // 子分類是一列，底下縮排列出它的帳戶，和股票頁的持股一樣
             Section {
@@ -435,6 +459,40 @@ private struct CashGroupRow: View {
                 if let old {
                     DeltaText(delta: total - old, base: old, showPercentOnly: true).font(.caption)
                 }
+            }
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+/// 負債分頁裡的子分類列（卡費、未出帳、貸款）：顯示合計，底下縮排列出帳戶
+private struct LiabilityGroupRow: View {
+    @Environment(\.portfolio) private var store
+    let group: LiabilityGroup
+    let accounts: [Account]
+    let snapshot: Snapshot
+    let previous: Snapshot?
+
+    var body: some View {
+        // value(of:) 對負債是負的；這裡顯示成要繳／要還的正數
+        let owed = -accounts.reduce(0) { $0 + store.value(of: $1, in: snapshot) }
+        let old = previous.map { p in -accounts.reduce(0) { $0 + store.value(of: $1, in: p) } }
+        HStack(spacing: 12) {
+            Image(systemName: group.symbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title).font(.body.weight(.medium))
+                Text("\(accounts.count) 個帳戶 · \(group.subtitle)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                MoneyText(value: owed).font(.title3.weight(.semibold))
+                if let old { LiabilityChange(now: owed, before: old).font(.caption) }
             }
         }
         .padding(.vertical, 3)
@@ -967,6 +1025,28 @@ struct AccountEditor: View {
     @State private var usesPortfolio: Bool
     /// 現金子分類；nil 為自動判斷
     @State private var cashGroup: CashGroup?
+    /// 負債：這期的結帳日、繳費日（打開時已過期的會帶到下個月同一天）
+    @State private var statementDate: Date?
+    @State private var dueDate: Date?
+    /// 打開時的值，用來判斷有沒有改過（沒改就保留原本存的日期）
+    @State private var initialStatementDate: Date?
+    @State private var initialDueDate: Date?
+    /// 打開時就已經自動帶到下個月、需要確認的項目
+    @State private var rolledKinds: Set<BillEvent.Kind> = []
+    /// 和同銀行的卡共用日期
+    @State private var shareBillDates: Bool
+    /// 負債種類與貸款設定
+    @State private var liabilityType: LiabilityType
+    @State private var loanDay: Int?
+    @State private var loanPaymentText: String
+    @State private var loanHasStart: Bool
+    @State private var loanStart: Date
+    /// 信用卡：自動扣款
+    @State private var autoDebit: Bool
+    /// 貸款：預約轉帳設定到哪天、轉入哪個帳戶
+    @State private var loanScheduled: Bool
+    @State private var loanScheduledUntil: Date
+    @State private var loanTransferAccount: UUID?
     @State private var confirmDelete = false
 
     // 圖示
@@ -1026,6 +1106,16 @@ struct AccountEditor: View {
         _currency = State(initialValue: account?.currency ?? .twd)
         _usesPortfolio = State(initialValue: account.map(\.isPortfolio) ?? (category == .stocks))
         _cashGroup = State(initialValue: account?.cashGroup)
+        _shareBillDates = State(initialValue: account?.sharesBillDates ?? true)
+        _liabilityType = State(initialValue: account?.resolvedLiabilityType ?? .card)
+        _loanDay = State(initialValue: account?.loanPaymentDay)
+        _loanPaymentText = State(initialValue: account?.loanMonthlyPayment.map { Fmt.number($0, digits: 0...2).replacingOccurrences(of: ",", with: "") } ?? "")
+        _loanHasStart = State(initialValue: account?.loanStartDate != nil)
+        _loanStart = State(initialValue: account?.loanStartDate ?? .now)
+        _autoDebit = State(initialValue: account?.autoDebit ?? false)
+        _loanScheduled = State(initialValue: account?.paymentScheduledUntil != nil)
+        _loanScheduledUntil = State(initialValue: account?.paymentScheduledUntil ?? .now)
+        _loanTransferAccount = State(initialValue: account?.paymentAccountID)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1127,6 +1217,85 @@ struct AccountEditor: View {
                     TextField("備註", text: $note, prompt: Text(category.isLiability ? "選填，例如：每月 15 號結帳" : "選填"))
                 }
 
+                if category.isLiability {
+                    Section {
+                        Picker("類型", selection: $liabilityType) {
+                            ForEach(LiabilityType.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                    } footer: {
+                        Text(liabilityType == .loan ? "貸款每月固定日期扣款；帳戶金額填剩餘本金。" : "信用卡每期的結帳日、繳費日可能因假日不同。")
+                    }
+                }
+
+                if category.isLiability && liabilityType == .loan {
+                    Section {
+                        Picker("每月扣款日", selection: $loanDay) {
+                            Text("不設定").tag(Int?.none)
+                            ForEach(1...31, id: \.self) { d in Text("每月 \(d) 號").tag(Int?.some(d)) }
+                        }
+                        HStack {
+                            Text("每月繳款金額")
+                            Spacer()
+                            TextField("每月繳款金額", text: $loanPaymentText, prompt: Text("選填"))
+                                .labelsHidden()
+                                .multilineTextAlignment(.trailing)
+                                .monospacedDigit()
+                                .frame(maxWidth: 140)
+                            Text(currency.rawValue).foregroundStyle(.secondary)
+                        }
+                        Toggle("目前還不需繳費", isOn: $loanHasStart)
+                        if loanHasStart {
+                            DatePicker("開始繳費日期", selection: $loanStart, displayedComponents: .date)
+                        }
+                        Toggle("自動扣款", isOn: $autoDebit)
+                        if !autoDebit {
+                            Toggle("已設定預約轉帳", isOn: $loanScheduled)
+                            if loanScheduled {
+                                DatePicker("設定到", selection: $loanScheduledUntil, displayedComponents: .date)
+                                Picker("轉入帳戶", selection: $loanTransferAccount) {
+                                    Text("不指定").tag(UUID?.none)
+                                    ForEach(store.activeAccounts(in: .cash)) { a in Text(a.name).tag(UUID?.some(a.id)) }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("還款")
+                    } footer: {
+                        Text("會顯示在總覽的「繳費與結帳」和月曆上。還在寬限期的話，打開「目前還不需繳費」並填開始繳費的日期。預約轉帳設定到的日期之後，總覽會提醒你再設定。")
+                    }
+                }
+
+                if category.isLiability && liabilityType == .card {
+                    Section {
+                        if let account, account.bankDomain != nil {
+                            Toggle(isOn: $shareBillDates) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("和同一間銀行的卡共用日期")
+                                    if !bankMates.isEmpty {
+                                        Text("一起設定：" + bankMates.map(\.name).joined(separator: "、"))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        billDateRow("繳費日", kind: .due, date: $dueDate)
+                        billDateRow("結帳日", kind: .statement, date: $statementDate)
+                        Toggle(isOn: $autoDebit) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("自動扣款")
+                                Text(autoDebit ? "從銀行帳戶自動扣，每期都不用另外處理"
+                                               : "沒有自動扣款：每期要在繳費日前設定預約轉帳，總覽會提醒")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("結帳與繳費")
+                    } footer: {
+                        Text("選填，填這一期的日期。過了之後會自動帶到下個月同一天，遇到假日不同再改。會顯示在總覽的「接下來要繳」和月曆上；貸款的扣款日填在繳費日。")
+                    }
+                }
+
                 Section {
                     Picker("分類", selection: $category) {
                         ForEach(AssetCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
@@ -1195,6 +1364,7 @@ struct AccountEditor: View {
                 }
             }
             .formStyle(.grouped)
+            .onAppear(perform: loadBillDates)
             .navigationTitle(isNew ? category.addTitle : "編輯「\(account?.name ?? "")」")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -1226,6 +1396,70 @@ struct AccountEditor: View {
         #endif
     }
 
+    /// 打開編輯時載入日期：用整組（同銀行共用）的日期；已經過了的帶到下一次（同一天），並提醒確認
+    private func loadBillDates() {
+        guard let account, account.category.isLiability else { return }
+        var rolled: Set<BillEvent.Kind> = []
+        func upcoming(_ kind: BillEvent.Kind) -> Date? {
+            guard let set = account.sharesBillDates ? store.groupBillDate(kind, for: account) : account.billDate(kind)
+            else { return nil }
+            if Calendar.current.startOfDay(for: set.date) >= Calendar.current.startOfDay(for: .now) { return set.date }
+            var probe = account
+            if kind == .due { probe.dueDate = set } else { probe.statementDate = set }
+            let next = probe.billEvents(from: .now, within: 62).first { $0.kind == kind }
+            if next != nil { rolled.insert(kind) }
+            return next?.date ?? set.date
+        }
+        let s = upcoming(.statement), d = upcoming(.due)
+        statementDate = s; dueDate = d
+        initialStatementDate = s; initialDueDate = d
+        rolledKinds = rolled
+    }
+
+    /// 同銀行、會一起共用日期的其他卡（顯示在開關下方）
+    private var bankMates: [Account] {
+        guard let account, let bank = account.bankDomain else { return [] }
+        return store.activeAccounts(in: .liability).filter { $0.id != account.id && $0.bankDomain == bank && $0.sharesBillDates }
+    }
+
+    /// 開關打開才顯示日期選擇；已自動帶到下個月的，提醒確認是不是同一天
+    @ViewBuilder private func billDateRow(_ title: String, kind: BillEvent.Kind, date: Binding<Date?>) -> some View {
+        Toggle(title, isOn: Binding(get: { date.wrappedValue != nil },
+                                    set: { date.wrappedValue = $0 ? (date.wrappedValue ?? .now) : nil }))
+        if let value = date.wrappedValue {
+            DatePicker("這期\(title)", selection: Binding(get: { value }, set: { date.wrappedValue = $0 }),
+                       displayedComponents: .date)
+            if rolledKinds.contains(kind), value == (kind == .due ? initialDueDate : initialStatementDate) {
+                Label("已經是下個月了，日期先帶到同一天，請確認是否正確", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// 負債種類與貸款設定寫回帳戶（種類和名稱判斷一致時存 nil，之後改名仍會自動判斷）
+    private func applyLoanSettings(to a: inout Account) {
+        a.liabilityType = nil
+        if a.resolvedLiabilityType != liabilityType { a.liabilityType = liabilityType }
+        if liabilityType == .loan {
+            a.loanPaymentDay = loanDay
+            a.loanMonthlyPayment = Fmt.parse(loanPaymentText)
+            a.loanStartDate = loanHasStart ? Calendar.current.startOfDay(for: loanStart) : nil
+            a.autoDebit = autoDebit ? true : nil
+            a.paymentScheduledUntil = !autoDebit && loanScheduled ? Calendar.current.startOfDay(for: loanScheduledUntil) : nil
+            a.paymentAccountID = !autoDebit && loanScheduled ? loanTransferAccount : nil
+            a.statementDate = nil
+            a.dueDate = nil
+        }
+    }
+
+    /// 沒改過就保留原本存的日期（還沒確認的自動帶入不會因為改了名稱就被當成已確認）
+    private func resolvedBillDate(_ value: Date?, initial: Date?, stored: BillDate?) -> BillDate? {
+        guard let value else { return nil }
+        if value == initial, let stored { return stored }
+        return BillDate(date: value)
+    }
+
     private func save() {
         if iconChoice == .custom, let pendingImage {
             try? IconLoader.shared.setCustom(pendingImage, accountID: draftID)
@@ -1235,15 +1469,35 @@ struct AccountEditor: View {
             a.note = note
             a.category = category
             a.cashGroup = category == .cash ? cashGroup : nil
+            a.statementDate = category.isLiability
+                ? resolvedBillDate(statementDate, initial: initialStatementDate, stored: a.statementDate) : nil
+            a.dueDate = category.isLiability
+                ? resolvedBillDate(dueDate, initial: initialDueDate, stored: a.dueDate) : nil
+            a.shareBillDates = category.isLiability && shareBillDates != a.sharesBillDates ? shareBillDates : a.shareBillDates
+            if category.isLiability { applyLoanSettings(to: &a) }
             a.icon = resolvedIcon
             if a.category == .stocks && a.valuation == .balance && usesPortfolio {
                 a.valuation = .portfolio
             }
             store.update(a)
+            // 自動扣款：同銀行共用日期的卡一起改
+            if a.category.isLiability && !a.isLoan && autoDebit != (account?.autoDebit ?? false) {
+                if a.sharesBillDates { store.setAutoDebit(autoDebit, for: a.id) }
+                else if var b = store.account(id: a.id) { b.autoDebit = autoDebit ? true : nil; store.update(b) }
+            }
+            // 改了日期：同銀行共用日期的卡一起改
+            if a.category.isLiability && a.sharesBillDates {
+                if dueDate != initialDueDate { store.setBillDate(dueDate, kind: .due, for: a.id) }
+                if statementDate != initialStatementDate { store.setBillDate(statementDate, kind: .statement, for: a.id) }
+            }
         } else {
             var a = draftAccount(icon: resolvedIcon)
             a.name = trimmedName
             a.cashGroup = category == .cash ? cashGroup : nil
+            a.statementDate = category.isLiability ? statementDate.map(BillDate.init) : nil
+            a.dueDate = category.isLiability ? dueDate.map(BillDate.init) : nil
+            a.autoDebit = category.isLiability && autoDebit ? true : nil
+            if category.isLiability { applyLoanSettings(to: &a) }
             store.add(a)
             onCreate?(a)
         }

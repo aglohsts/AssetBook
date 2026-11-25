@@ -133,24 +133,28 @@ struct HistoryView: View {
         let byDay = Dictionary((store.autoSnapshots + store.snapshots).map { (cal.startOfDay(for: $0.date), $0) },
                                uniquingKeysWith: { _, manual in manual })
         let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+        // 這個月每一天的結帳日、繳費日
+        let monthLength = cal.range(of: .day, in: .month, for: month)?.count ?? 31
+        let bills = Dictionary(grouping: store.billEvents(from: month, within: monthLength - 1)) { cal.startOfDay(for: $0.date) }
         return LazyVGrid(columns: cols, spacing: 6) {
             ForEach(Array(dayCells.enumerated()), id: \.offset) { _, day in
                 if let day {
                     if let snap = byDay[cal.startOfDay(for: day)] {
                         let auto = store.isAuto(snap)
                         NavigationLink(value: snap) {
-                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap), isAuto: auto)
+                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap), isAuto: auto,
+                                    bills: bills[cal.startOfDay(for: day)] ?? [])
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
                             if auto {
-                                Button("刪除自動記錄", systemImage: "trash", role: .destructive) { store.deleteAuto(snap) }
+                                Button("刪除估算", systemImage: "trash", role: .destructive) { store.deleteAuto(snap) }
                             } else {
                                 Button("刪除紀錄", systemImage: "trash", role: .destructive) { pendingDelete = snap }
                             }
                         }
                     } else {
-                        DayCell(day: day, snapshot: nil, previous: nil)
+                        DayCell(day: day, snapshot: nil, previous: nil, bills: bills[cal.startOfDay(for: day)] ?? [])
                     }
                 } else {
                     Color.clear.frame(height: 76)
@@ -167,7 +171,7 @@ struct HistoryView: View {
             let delta = store.netWorth(last) - store.netWorth(baseline)
             let autoCount = store.autoSnapshots.filter { cal.isDate($0.date, equalTo: month, toGranularity: .month) }.count
             HStack(spacing: 8) {
-                Text("本月 \(inMonth.count) 筆紀錄" + (autoCount > 0 ? "、\(autoCount) 天自動估值" : ""))
+                Text("本月 \(inMonth.count) 筆紀錄" + (autoCount > 0 ? "、\(autoCount) 天估算" : ""))
                 if baseline.id != last.id {
                     Text("·")
                     DeltaText(delta: delta)
@@ -225,8 +229,10 @@ private struct DayCell: View {
     let day: Date
     let snapshot: Snapshot?
     let previous: Snapshot?
-    /// 自動估值點：顏色淡一點，右上角標「自動」
+    /// 估算（自動估值點）：數字前加虛線圓圈、虛線框
     var isAuto = false
+    /// 這天的結帳日、繳費日
+    var bills: [BillEvent] = []
 
     var body: some View {
         let isToday = Calendar.current.isDateInToday(day)
@@ -240,7 +246,9 @@ private struct DayCell: View {
             if let snapshot {
                 let net = store.netWorth(snapshot)
                 Spacer(minLength: 0)
-                Text(store.hideAmounts ? "••" : Fmt.wan(net))
+                // 沒記錄、App 自己估的那天前面加虛線圓圈
+                ((isAuto ? Text("\(Image(systemName: "circle.dashed")) ") : Text(""))
+                    + Text(store.hideAmounts ? "••" : Fmt.wan(net)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(isAuto ? Color.secondary : Color.primary)
                     .lineLimit(1)
@@ -255,16 +263,32 @@ private struct DayCell: View {
                         .foregroundStyle(store.deltaColor(d))
                 }
             }
+            if !bills.isEmpty {
+                Spacer(minLength: 0)
+                ForEach(bills.prefix(2)) { b in
+                    // 從上個月帶入、還沒確認的日子加「?」
+                    Text("\(b.shortTitle) \(b.name)\(b.needsConfirm ? "?" : "")")
+                        .font(.system(size: 10))
+                        .lineLimit(1)
+                        .foregroundStyle(b.kind == .due ? Color.red : Color.secondary)
+                        .opacity(b.needsConfirm ? 0.6 : 1)
+                }
+                if bills.count > 2 {
+                    Text("+\(bills.count - 2)").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(8)
         .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
-        .overlay(alignment: .topTrailing) {
+        .background(snapshot == nil || isAuto ? Color.clear : Color.primary.opacity(0.05),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            // 估算的那天用虛線框，跟有記錄的實心格子分開
             if isAuto {
-                Text("自動").font(.system(size: 9)).foregroundStyle(.tertiary).padding(6)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
         }
-        .background(snapshot == nil ? Color.clear : Color.primary.opacity(isAuto ? 0.025 : 0.05),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
@@ -297,14 +321,20 @@ struct SnapshotDetailView: View {
         let prev = store.snapshot(before: snapshot)
         List {
             Section {
+                if store.isAuto(snapshot) { estimateNotice(snapshot) }
                 editNotice
             }
 
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
-                    MoneyText(value: store.netWorth(snapshot))
-                        .font(.system(size: 34, weight: .regular))
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if store.isAuto(snapshot) {
+                            Image(systemName: "circle.dashed").font(.system(size: 22)).foregroundStyle(.secondary)
+                        }
+                        MoneyText(value: store.netWorth(snapshot))
+                    }
+                    .font(.system(size: 34, weight: .regular))
                     if let prev {
                         let old = store.netWorth(prev)
                         DeltaBadge(delta: store.netWorth(snapshot) - old, base: old)
@@ -381,6 +411,21 @@ struct SnapshotDetailView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("這筆是 \(snapshot.date.formatted(.dateTime.month().day())) 的紀錄，過去的紀錄不能修改。")
+        }
+    }
+
+    /// 這天沒有記錄、是 App 估的：說明餘額沿用哪一天
+    private func estimateNotice(_ s: Snapshot) -> some View {
+        let base = store.snapshots.last { $0.date < s.date }
+        return Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("估算 · 這天沒有記錄")
+                Text(base.map { "餘額沿用 \($0.date.formatted(.dateTime.month(.defaultDigits).day()))，股價和匯率用當天的。" }
+                     ?? "股價和匯率用當天的。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
         }
     }
 

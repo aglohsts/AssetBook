@@ -17,6 +17,7 @@ struct DashboardView: View {
                 VStack(spacing: 16) {
                     NetWorthCard(snapshot: current, record: latest, comparison: comparison, mode: $mode)
                     StatStrip(snapshot: current)
+                    UpcomingBillsCard(record: latest)
                     CompositionCard(snapshot: current, previous: comparison, tab: $tab)
                     MarketCard(snapshot: current, previous: comparison)
                 }
@@ -120,15 +121,26 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                MoneyText(value: selected?.value ?? net)
-                    .font(.system(size: 48, weight: .regular))
-                    .minimumScaleFactor(0.6)
-                    .lineLimit(1)
+                // 估算的數字前面加虛線圓圈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
+                let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if isEstimate {
+                        Image(systemName: "circle.dashed")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
+                    }
+                    MoneyText(value: selected?.value ?? net)
+                }
+                .font(.system(size: 48, weight: .regular))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
                 HStack(spacing: 8) {
                     if let selected, let first = pts.first {
                         // 拖曳中：和區間起點比較
                         DeltaBadge(delta: selected.value - first.value, base: first.value)
-                        Text(selected.isLive ? "即時 vs 區間起點" : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day())) vs 區間起點")
+                        Text(selected.isLive ? "即時估算 vs 區間起點"
+                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day()))\(selected.isAuto ? " 估算" : "") vs 區間起點")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     } else if let comparison {
@@ -218,7 +230,7 @@ private struct NetWorthCard: View {
                         .foregroundStyle(.orange)
                 default:
                     Label {
-                        Text("淨資產 · 即時 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened))")
+                        Text("淨資產 · 即時估算 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened)) · 餘額沿用 \(record.date.formatted(.dateTime.month(.defaultDigits).day()))")
                     } icon: {
                         Circle().fill(.green).frame(width: 7, height: 7)
                     }
@@ -263,6 +275,14 @@ private struct NetWorthCard: View {
         return p
     }
 
+    /// 走勢圖 X 軸：一年以上只標年份，兩個月以上標年/月，再短才標月/日
+    static func axisLabel(_ d: Date, spanDays: Double) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        if spanDays > 400 { return "\(c.year!)" }
+        if spanDays > 60 { return "\(c.year!)/\(c.month!)" }
+        return "\(c.month!)/\(c.day!)"
+    }
+
     /// 依區間漲跌決定線的顏色（跟隨紅漲綠跌設定）
     private func trendColor(_ pts: [Point]) -> Color {
         guard let a = pts.first?.value, let b = pts.last?.value, abs(b - a) >= 1 else { return .accentColor }
@@ -287,10 +307,19 @@ private struct NetWorthCard: View {
                     .foregroundStyle(color)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.monotone)
-                // 每個記錄日一個點：手動記錄是實心，自動估值點是小的淡點
-                PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
-                    .symbolSize(p.isAuto ? 14 : 32)
-                    .foregroundStyle(p.isAuto ? color.opacity(0.45) : color)
+                // 每個記錄日一個點：有記錄是實心點，估算是空心點
+                if p.isAuto {
+                    PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
+                        .symbol {
+                            Circle().strokeBorder(color, lineWidth: 1.5)
+                                .background(Circle().fill(Color.cardBackground))
+                                .frame(width: 7, height: 7)
+                        }
+                } else {
+                    PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
+                        .symbolSize(32)
+                        .foregroundStyle(color)
+                }
             }
             if let livePoint = pts.last, livePoint.isLive, let lastRecord = recorded.last {
                 ForEach([lastRecord, livePoint]) { p in
@@ -327,10 +356,14 @@ private struct NetWorthCard: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.month(.defaultDigits).day())
-                    .font(.caption2)
-                    .foregroundStyle(Color.secondary)
+            // 跨年時刻度會落在 1/1，只顯示月/日會變成好幾個「1/1」：依區間長短換格式
+            let span = (pts.last?.date ?? .now).timeIntervalSince(pts.first?.date ?? .now) / 86_400
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisValueLabel {
+                    if let d = value.as(Date.self) { Text(Self.axisLabel(d, spanDays: span)) }
+                }
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
             }
         }
         .animation(.snappy, value: range)
@@ -443,7 +476,12 @@ private struct CompositionCard: View {
         let count: Int
         let category: AssetCategory?
 
+        /// 現金那一塊：扣掉的負債（金額）與扣之前的存款，用在圖例的說明
+        var deducted: Double = 0
+        var gross: Double = 0
+
         var isLiabilityPart: Bool { category?.isLiability ?? false }
+
     }
 
     private var parts: [Part] {
@@ -536,22 +574,19 @@ private struct CompositionCard: View {
         }
     }
 
-    /// 外圈是資產組成（合計 100%）；負債畫成內側的細紅環，長度 = 負債佔總資產的比例。
+    /// 圓環是資產組成（合計 = 總資產）；負債是現金那一塊裡面的細灰線。
     /// 中間預設顯示淨資產（總資產 − 負債）
     private func donut(_ assetParts: [Part], debtPart: Part?, assets: Double, debt: Double) -> some View {
-        let total = max(assets, 1)
-        let current = (assetParts + [debtPart, netPart(assets: assets, debt: debt)].compactMap { $0 })
-            .first { $0.id == selected }
+        let shown = netParts(assetParts, debtPart: debtPart)
+        let netTotal = max(shown.reduce(0) { $0 + max($1.value, 0) }, 1)
+        let current = (shown + [debtPart].compactMap { $0 }).first { $0.id == selected }
+        let cash = assetParts.first { $0.id == debtSourceID }
         return DonutChart(slices: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
-                          selected: $selected, progress: appeared ? 1 : 0)
-            .overlay {
-                if let debtPart {
-                    DebtRing(debtFraction: debt / total,
-                             assets: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
-                             progress: appeared ? 1 : 0, debtColor: debtPart.color,
-                             selectedID: selected, debtID: debtPart.id, netID: Self.netID)
-                }
-            }
+                          selected: $selected, progress: appeared ? 1 : 0,
+                          inset: debt > 0 && (cash?.value ?? 0) > 0
+                            ? .init(id: AssetCategory.liability.rawValue, sliceID: debtSourceID,
+                                    fraction: debt / cash!.value, color: Self.debtColor)
+                            : nil)
             .overlay {
                 VStack(spacing: 3) {
                     if let current {
@@ -562,7 +597,8 @@ private struct CompositionCard: View {
                             .foregroundStyle(.secondary)
                         CountingMoney(value: isDebt ? -current.value : current.value, hidden: store.hideAmounts)
                             .font(.system(size: 22, weight: .regular))
-                        Text((isDebt ? "佔總資產 −" : isNet ? "佔總資產 " : "") + (current.value / total).formatted(.percent.precision(.fractionLength(1))))
+                        Text(isDebt ? "從現金與存款扣除"
+                             : (isNet ? "" : "佔淨資產 ") + (max(current.value, 0) / netTotal).formatted(.percent.precision(.fractionLength(1))))
                             .font(.subheadline)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
@@ -579,44 +615,103 @@ private struct CompositionCard: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                // 內側還有一圈負債細環，文字再往內縮，避免碰到
-                .padding(.horizontal, 56)
+                .padding(.horizontal, 46)
                 .allowsHitTesting(false)
                 .animation(.snappy(duration: 0.25), value: selected)
             }
     }
 
     /// 資產各類以總資產為 100%；負債放在分隔線下，以負數顯示（佔總資產多少要扣掉）
+    /// 比例的算法：加密貨幣、股票、現金與存款（扣掉負債）三項，合計是淨資產。負債不單獨算一項
     private func legend(_ assetParts: [Part], debtPart: Part?, assets: Double) -> some View {
-        let total = max(assets, 1)
+        let parts = netParts(assetParts, debtPart: debtPart)
+        let total = max(parts.reduce(0) { $0 + max($1.value, 0) }, 1)
         return VStack(spacing: 4) {
-            ForEach(assetParts) { p in
-                legendRow(p, share: p.value / total)
-            }
-            if let debtPart {
-                Divider().padding(.horizontal, 12)
-                legendRow(debtPart, share: debtPart.value / total, isDeduction: true)
-                if let net = netPart(assets: assets, debt: debtPart.value) {
-                    legendRow(net, share: net.value / total)
-                }
+            ForEach(parts) { p in
+                legendRow(p, share: max(p.value, 0) / total)
+                if p.deducted > 0, let debtPart { debtRow(debtPart, cash: p.gross) }
             }
         }
     }
 
+    /// 現金下面的一列：負債用紅色標出來，佔現金多少（對應圓環裡現金那塊中間的紅線）
+    private func debtRow(_ d: Part, cash: Double) -> some View {
+        let share = cash > 0 ? d.value / cash : 0
+        let isSelected = selected == d.id
+        return VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Text("−").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                Circle().fill(Self.debtColor).frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("負債").font(.subheadline.weight(.medium))
+                    Text("\(d.count) 個帳戶 · 從現金與存款扣除").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    MoneyText(value: -d.value).font(.subheadline.weight(.medium))
+                    HStack(spacing: 8) {
+                        if let old = d.previous {
+                            // 以對淨資產的影響上色：負債變少是好事
+                            DeltaText(delta: old - d.value, base: old, showPercentOnly: true)
+                        }
+                        Text("佔現金 " + share.formatted(.percent.precision(.fractionLength(0))))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption).monospacedDigit()
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    Capsule().fill(Self.debtColor)
+                        .frame(width: max(geo.size.width * min(share, 1) * (appeared ? 1 : 0), appeared ? 4 : 0))
+                }
+            }
+            .frame(height: 3)
+            .padding(.leading, 38)
+        }
+        .padding(.leading, 28)
+        .padding(.trailing, 12)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(isSelected ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opacity(selected == nil || isSelected || selected == debtSourceID ? 1 : 0.45)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.2)) { selected = inside ? d.id : (selected == d.id ? nil : selected) }
+        }
+        .onTapGesture { tab = .accounts(AccountsFilter(.liability)) }
+        .help("查看負債的帳戶")
+    }
+
+    /// 把負債從現金（幣別分組時是台幣）那一項扣掉；上一筆的數字也一樣扣，漲跌才對得上
+    private func netParts(_ assetParts: [Part], debtPart: Part?) -> [Part] {
+        guard let debtPart, debtPart.value > 0 else { return assetParts }
+        return assetParts.map { p in
+            guard p.id == debtSourceID else { return p }
+            return Part(id: p.id, title: p.title, symbol: p.symbol, color: p.color,
+                        value: p.value - debtPart.value,
+                        previous: zip2(p.previous, debtPart.previous).map { $0 - $1 },
+                        count: p.count, category: p.category, deducted: debtPart.value, gross: p.value)
+        }
+    }
+
+    private func zip2(_ a: Double?, _ b: Double?) -> (Double, Double)? {
+        guard let a, let b else { return nil }
+        return (a, b)
+    }
+
     static let netID = "net-worth"
 
-    /// 內圈灰色那段：總資產扣掉負債，真正屬於自己的部分
-    private func netPart(assets: Double, debt: Double) -> Part? {
-        guard debt > 0 else { return nil }
-        let liability = AssetCategory.liability
-        return Part(id: Self.netID, title: "淨資產", symbol: "checkmark.seal", color: Color.primary.opacity(0.35),
-                    value: assets - debt,
-                    previous: previous.map { s in
-                        AssetCategory.allCases.filter { !$0.isLiability }.reduce(0) { $0 + max(store.total($1, in: s), 0) }
-                            + store.total(liability, in: s)
-                    },
-                    count: 0, category: nil)
-    }
+    /// 負債是現金要還掉的部分：在「現金與存款」（幣別分組時是台幣）那一塊裡面畫一條更細的灰線，
+    /// 長度是負債佔現金的比例。現金本身完整呈現
+    private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
+    /// 負債的顏色：淺薄荷綠。跟現金同色系（紅配綠太衝），但比現金亮，
+    /// 現金那塊變淡時（滑到負債）也看得清楚；深綠在深色背景和變淡的現金上都太不明顯
+    static let debtColor = Color(hue: 0.42, saturation: 0.28, brightness: 0.95)
+
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
         let isSelected = selected == p.id
@@ -626,7 +721,9 @@ private struct CompositionCard: View {
                 Circle().fill(p.color).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(p.title).font(.subheadline.weight(.medium))
-                    Text(p.id == Self.netID ? "總資產 − 負債" : "\(p.count) 個帳戶")
+                    Text(p.deducted > 0 && !store.hideAmounts
+                         ? "存款 \(Fmt.money(p.gross, .twd)) − 負債 \(Fmt.money(p.deducted, .twd))"
+                         : p.id == Self.netID ? "總資產 − 負債" : "\(p.count) 個帳戶")
                         .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
@@ -684,69 +781,6 @@ private struct CompositionCard: View {
     }
 }
 
-/// 圓環內側的細環：一整圈代表總資產。紅色那段是負債，其餘是淨資產（真正屬於自己的部分），
-/// 淨資產那段按外圈的比例分成各分類的顏色、半透明，像是外圈縮小後扣掉負債的樣子
-private struct DebtRing: View {
-    struct Slice { let id: String; let color: Color; let value: Double }
-    /// 負債佔總資產的比例（0...1）
-    let debtFraction: Double
-    /// 外圈各分類（用來把淨資產那段按比例上色）
-    let assets: [Slice]
-    /// 進場動畫進度
-    let progress: Double
-    let debtColor: Color
-    var selectedID: String?
-    let debtID: String
-    let netID: String
-    private let outerWidth: CGFloat = 26
-
-    var body: some View {
-        GeometryReader { geo in
-            let side = min(geo.size.width, geo.size.height)
-            // 跟 DonutChart 的外圈半徑一致，再往內縮一點
-            let radius = (side - outerWidth - 18) / 2 - outerWidth / 2 - 10
-            let f = min(max(debtFraction, 0), 1)
-            // 兩段之間留一點空隙（圓頭會各多出半個線寬）
-            let gap = f > 0 && f < 1 ? (9 + 4) / (2 * .pi * radius) : 0
-            let segGap = (6 + 4) / (2 * .pi * radius)
-            ZStack {
-                arc(from: 0, to: f, gap: gap, color: debtColor, ids: [debtID])
-                // 淨資產那段：依外圈比例切成各分類的顏色
-                let total = max(assets.reduce(0) { $0 + $1.value }, 1)
-                let spans = assets.reduce(into: [(Slice, Double, Double)]()) { out, a in
-                    let start = out.last?.2 ?? f
-                    out.append((a, start, start + (1 - f) * a.value / total))
-                }
-                ForEach(Array(spans.enumerated()), id: \.offset) { i, item in
-                    // 只有一段時兩端接負債，用 gap；多段時中間的接縫用較小的 segGap
-                    let lead = i == 0 ? gap : segGap
-                    let trail = i == spans.count - 1 ? gap : segGap
-                    arc(from: item.1 - gap / 2 + lead / 2, to: item.2 + gap / 2 - trail / 2, gap: gap,
-                        color: item.0.color.opacity(0.45), ids: [netID, item.0.id])
-                }
-            }
-            .frame(width: radius * 2, height: radius * 2)
-            .frame(width: geo.size.width, height: geo.size.height)
-        }
-        .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.6), value: debtFraction)
-        .animation(.easeOut(duration: 0.2), value: selectedID)
-    }
-
-    @ViewBuilder private func arc(from a: Double, to b: Double, gap: Double, color: Color, ids: [String]) -> some View {
-        if b - a > gap + 0.0005 {
-            let isSelected = selectedID.map(ids.contains) ?? false
-            let from = (a + gap / 2) * progress
-            let to = max((b - gap / 2) * progress, from + 0.0005)
-            Circle()
-                .trim(from: from, to: to)
-                .stroke(color, style: StrokeStyle(lineWidth: isSelected ? 10 : 6, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .opacity(selectedID == nil || isSelected ? 1 : 0.28)
-        }
-    }
-}
-
 /// 自己畫的圓環圖：每一段是一條圓弧，進場時順時針展開；被選取的那段會變粗，其他變淡
 private struct DonutChart: View {
     struct Slice: Identifiable {
@@ -762,11 +796,21 @@ private struct DonutChart: View {
         let end: CGFloat
     }
 
+    /// 畫在某一段裡面、更細的一條線（例如現金裡要還掉的負債）：從那一段的尾端往前，佔那一段的 fraction
+    struct Inset {
+        /// 這條線自己的 id（滑到圖例「負債」那一列時亮起）
+        let id: String
+        let sliceID: String
+        let fraction: Double
+        let color: Color
+    }
+
     let slices: [Slice]
     @Binding var selected: String?
     /// 0 → 1：進場動畫的進度
     var progress: CGFloat
     var lineWidth: CGFloat = 26
+    var inset: Inset? = nil
 
     /// 每一段的弧長（佔整圈的比例）。太小的段落放大到剛好放得下一顆圓頭，
     /// 多出來的長度從其他段按比例扣掉，所以每一段都能維持圓角。
@@ -810,6 +854,9 @@ private struct DonutChart: View {
                 ForEach(arcs) { arc in
                     segment(arc, gap: gap, radius: radius)
                 }
+                if let inset, let arc = arcs.first(where: { $0.id == inset.sliceID }) {
+                    insetLine(inset, in: arc, gap: gap, radius: radius)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Circle())
@@ -826,6 +873,25 @@ private struct DonutChart: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .animation(.easeOut(duration: 0.4), value: slices.map(\.value))
+    }
+
+    /// 段落中間的細線：跟著那一段一起淡出、一起進場
+    @ViewBuilder private func insetLine(_ inset: Inset, in arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
+        let visibleStart = arc.start + gap / 2, visibleEnd = arc.end - gap / 2
+        // 滑到負債時變粗，現金那塊變淡，細線維持全亮
+        let width: CGFloat = selected == inset.id ? 11 : 7
+        // 細線也是圓頭：兩端各縮半個細線寬，才不會凸出段落
+        let capInset = width / 2 / (2 * .pi * radius)
+        let length = max((visibleEnd - visibleStart) * CGFloat(min(max(inset.fraction, 0), 1)) - 2 * capInset, 0.0005)
+        let to = visibleEnd - capInset
+        let from = max(to - length, visibleStart + capInset)
+        Circle()
+            .trim(from: from * progress, to: max(to * progress, from * progress))
+            .stroke(inset.color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+            .frame(width: radius * 2, height: radius * 2)
+            .rotationEffect(.degrees(-90))
+            .opacity(selected == nil || selected == arc.id || selected == inset.id ? 1 : 0.28)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder private func segment(_ arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
@@ -970,5 +1036,298 @@ private struct MarketCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+// MARK: - 接下來要繳
+
+/// 負債帳戶設定了結帳日、繳費日時，列出接下來 30 天內的日子；繳費日帶出最近一筆紀錄的應繳金額
+private struct UpcomingBillsCard: View {
+    @Environment(\.portfolio) private var store
+    let record: Snapshot
+
+    private var events: [BillEvent] { store.billEvents(from: .now, within: 30) }
+
+    @State private var editing: BillEvent?
+    @State private var draftDate = Date.now
+    /// 貸款的預約轉帳設定（點貸款那一列時）
+    @State private var editingLoan: BillEvent?
+    @State private var loanScheduled = false
+    @State private var loanUntil = Date.now
+    @State private var loanTo: UUID?
+
+    /// 還在寬限期、還不用繳的貸款
+    private var notStartedLoans: [Account] {
+        store.activeAccounts(in: .liability).filter { $0.loanNotStarted() && $0.loanPaymentDay != nil }
+    }
+
+    var body: some View {
+        let events = events
+        if !events.isEmpty || !notStartedLoans.isEmpty {
+            Card {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("繳費與結帳").font(.headline.weight(.medium))
+                    Text("30 天內").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    let pending = events.reduce(0) { $0 + (store.paymentStatus(for: $1)?.pendingCount ?? 0) }
+                    if pending > 0 {
+                        Label("\(pending) 筆還沒處理（預約轉帳／換匯）", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if events.contains(where: \.needsConfirm) {
+                        Label("有日期從上個月帶入，請確認", systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                // 繳費和結帳分兩欄並排；畫面窄時上下排
+                let due = events.filter { $0.kind == .due }
+                let statement = events.filter { $0.kind == .statement }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        column("繳費", systemImage: "creditcard", events: due, loans: notStartedLoans)
+                        column("結帳", systemImage: "doc.text", events: statement)
+                    }
+                    .frame(minWidth: 640)
+                    VStack(alignment: .leading, spacing: 16) {
+                        column("繳費", systemImage: "creditcard", events: due, loans: notStartedLoans)
+                        column("結帳", systemImage: "doc.text", events: statement)
+                    }
+                }
+            }
+        }
+    }
+
+    private func column(_ title: String, systemImage: String, events: [BillEvent], loans: [Account] = []) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            if events.isEmpty {
+                Text("30 天內沒有").font(.caption).foregroundStyle(.tertiary).padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(events.prefix(6).enumerated()), id: \.element.id) { i, e in
+                        if i > 0 { Divider().opacity(0.6) }
+                        row(e)
+                    }
+                }
+            }
+            // 寬限期中的貸款：還不用繳，標出開始繳費的日期
+            ForEach(loans) { a in
+                if let start = a.loanStartDate {
+                    Label("\(a.name)：\(start.formatted(.dateTime.year().month(.defaultDigits).day())) 起開始繳",
+                          systemImage: "hourglass")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// 點一列可以確認或改日期（遇到假日不同天）
+    private func row(_ e: BillEvent) -> some View {
+        if e.account.isLoan {
+            // 貸款每月固定日期扣款，日期不用確認；點一下設定預約轉帳到哪天、轉入哪個帳戶
+            return AnyView(Button {
+                let a = store.account(id: e.account.id) ?? e.account
+                loanScheduled = a.paymentScheduledUntil != nil
+                loanUntil = a.paymentScheduledUntil ?? e.date
+                loanTo = a.paymentAccountID
+                editingLoan = e
+            } label: {
+                rowContent(e).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("點一下設定預約轉帳")
+            .popover(item: Binding(get: { editingLoan?.id == e.id ? editingLoan : nil },
+                                   set: { if $0 == nil { editingLoan = nil } }), arrowEdge: .trailing) { ev in
+                loanPopover(ev)
+            })
+        }
+        return AnyView(Button {
+            draftDate = e.date
+            editing = e
+        } label: {
+            rowContent(e).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(e.needsConfirm ? "從上個月同一天帶入，點一下確認日期" : "點一下修改日期")
+        .popover(item: Binding(get: { editing?.id == e.id ? editing : nil },
+                               set: { if $0 == nil { editing = nil } }), arrowEdge: .trailing) { ev in
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(ev.name) · \(ev.title)日").font(.headline)
+                if let members = ev.memberNames {
+                    Text("同一間銀行一起改：\(members)").font(.caption).foregroundStyle(.secondary)
+                }
+                if ev.needsConfirm {
+                    Text("從上個月同一天帶入，遇到假日可能不同，請確認。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                DatePicker("日期", selection: $draftDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                switch store.paymentStatus(for: ev) {
+                case .autoDebit?:
+                    Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                case .nothingDue?:
+                    Label("本期沒有要繳的金額，不用處理", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+                case .tasks(let tasks)?:
+                    // 每個要繳的幣別一個勾：台幣「已設定預約轉帳」、外幣「已換匯日幣」等；不用繳的幣別不列
+                    ForEach(tasks) { t in
+                        Toggle("這期\(t.doneTitle)", isOn: Binding(
+                            get: {
+                                if case .tasks(let now)? = store.paymentStatus(for: ev) {
+                                    return now.first { $0.currency == t.currency }?.done ?? false
+                                }
+                                return false
+                            },
+                            set: { store.setPaymentDone($0, currency: t.currency, for: ev) }))
+                    }
+                case nil:
+                    EmptyView()
+                }
+                HStack {
+                    Spacer()
+                    Button("取消") { editing = nil }
+                    Button(ev.needsConfirm && Calendar.current.isDate(draftDate, inSameDayAs: ev.date) ? "確認是這天" : "儲存") {
+                        store.setBillDate(draftDate, kind: ev.kind, for: ev.account.id)
+                        editing = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding()
+            .frame(width: 300)
+        })
+    }
+
+    /// 貸款：設定預約轉帳到哪天、轉入哪個帳戶
+    private func loanPopover(_ ev: BillEvent) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(ev.account.name) · 扣款").font(.headline)
+            Text("每月 \(ev.account.loanPaymentDay ?? 0) 號扣款" +
+                 (ev.loanPayment.map { "，每期 " + Fmt.money($0, ev.account.currency) } ?? ""))
+                .font(.caption).foregroundStyle(.secondary)
+            if ev.account.autoDebit == true {
+                Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("已設定預約轉帳", isOn: $loanScheduled)
+                if loanScheduled {
+                    DatePicker("設定到", selection: $loanUntil, displayedComponents: .date)
+                    Picker("轉入帳戶", selection: $loanTo) {
+                        Text("不指定").tag(UUID?.none)
+                        ForEach(store.activeAccounts(in: .cash)) { a in Text(a.name).tag(UUID?.some(a.id)) }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { editingLoan = nil }
+                Button("儲存") {
+                    store.setLoanTransfer(until: loanScheduled ? loanUntil : nil, to: loanTo, for: ev.account.id)
+                    editingLoan = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(ev.account.autoDebit == true)
+            }
+        }
+        .padding()
+        .frame(width: 320)
+    }
+
+    /// 繳費方式：自動扣款、已設定預約轉帳，或還沒設定（快到期時變紅）
+    @ViewBuilder private func paymentStatusLabel(_ e: BillEvent, daysLeft: Int) -> some View {
+        switch store.paymentStatus(for: e) {
+        case .autoDebit?:
+            Label("自動扣款", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+        case .tasks(let tasks)?:
+            // 每個幣別一行：完成是綠色，還沒處理是橘色（剩 3 天內變紅）
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(tasks) { t in
+                    if t.done {
+                        Label(t.doneTitle + loanDetail(t), systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    } else {
+                        Label(t.pendingTitle, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(daysLeft <= 3 ? Color.red : Color.orange)
+                    }
+                }
+            }
+        case .nothingDue?:
+            Label("本期無需繳費", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    /// 貸款的預約轉帳：設定到哪天、轉入哪個帳戶，例如「（到 2027/3/22・轉入 LINE Bank）」
+    private func loanDetail(_ t: PaymentTask) -> String {
+        var parts: [String] = []
+        if let until = t.scheduledUntil { parts.append("到 " + until.formatted(.dateTime.year().month(.defaultDigits).day())) }
+        if let to = t.transferTo { parts.append("轉入 " + to) }
+        return parts.isEmpty ? "" : "（" + parts.joined(separator: "・") + "）"
+    }
+
+    private func amountLine(_ a: Account, _ v: Double) -> some View {
+        HStack(spacing: 4) {
+            if v < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
+            if store.hideAmounts {
+                Text("••••").font(.subheadline)
+            } else {
+                Text(Fmt.money(abs(v), a.currency)).font(.subheadline).monospacedDigit()
+                if a.currency != .twd {
+                    Text("（" + Fmt.money(abs(v) * store.rate(a.currency, in: record), .twd) + "）")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private func rowContent(_ e: BillEvent) -> some View {
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
+        let urgent = e.kind == .due && days <= 3
+        // 應繳金額：各張卡換成台幣加總；外幣另外列出原幣金額
+        // 貸款用每月繳款金額（帳戶金額是剩餘本金）
+        let owed = e.account.isLoan
+            ? (e.loanPayment.map { [(e.account, $0)] } ?? [])
+            : e.accounts.compactMap { a in record.amounts[a.id].map { (a, $0) } }.filter { $0.1 != 0 }
+        return HStack(spacing: 12) {
+            AccountAvatar(account: e.account, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(e.name).lineLimit(1)
+                // 欄位已經寫了繳費／結帳，這裡標星期（方便看是不是遇到假日）；同銀行多張卡時列出卡名
+                Text([e.date.formatted(.dateTime.weekday(.wide)), e.memberNames].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                paymentStatusLabel(e, daysLeft: days)
+            }
+            Spacer(minLength: 8)
+            if e.kind == .due, !owed.isEmpty {
+                // 每張卡各一行、分開繳，不合計：外幣寫原幣並附台幣換算，負數是退款
+                VStack(alignment: .trailing, spacing: 2) {
+                    ForEach(owed, id: \.0.id) { a, v in
+                        amountLine(a, v)
+                    }
+                }
+            }
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(e.date.formatted(.dateTime.month(.defaultDigits).day()))
+                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                if e.needsConfirm {
+                    Text("請確認").font(.caption.weight(.medium)).foregroundStyle(.orange)
+                } else {
+                    Text(days == 0 ? "今天" : days == 1 ? "明天" : "剩 \(days) 天")
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(urgent ? Color.red : Color.secondary)
+                }
+            }
+            .frame(minWidth: 64, alignment: .trailing)
+        }
+        .padding(.vertical, 8)
     }
 }
