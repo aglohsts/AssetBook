@@ -250,6 +250,33 @@ struct MoneyText: View {
     }
 }
 
+// MARK: - 負債金額（退款）
+
+/// 綠色的「退款」標籤：負債是負數（溢繳、退款）時用，全 App 同一種樣式
+struct RefundTag: View {
+    var body: some View {
+        Text("退款")
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Color.green.opacity(0.15), in: Capsule())
+            .foregroundStyle(.green)
+    }
+}
+
+/// 負債金額的統一呈現：owed 是要繳／要還的錢（正數）；負數代表退款，顯示「退款」標籤加正的金額，
+/// 不會出現負號
+struct OwedAmount: View {
+    let owed: Double
+    var currency: Currency = .twd
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if owed < -0.5 { RefundTag() }
+            MoneyText(value: abs(owed), currency: currency)
+        }
+    }
+}
+
 // MARK: - 漲跌
 
 extension PortfolioStore {

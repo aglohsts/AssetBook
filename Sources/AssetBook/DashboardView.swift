@@ -390,7 +390,7 @@ private struct StatStrip: View {
             Text("\(store.activeAccounts.filter { !$0.category.isLiability }.count) 個帳戶")
         }
         let liabilities = tile("負債") {
-            MoneyText(value: debt)
+            OwedAmount(owed: debt)
         } footer: {
             Text(gross > 0 ? "佔總資產 \((debt / gross).formatted(.percent.precision(.fractionLength(1))))" : "—")
         }
@@ -1274,7 +1274,7 @@ private struct UpcomingBillsCard: View {
 
     private func amountLine(_ a: Account, _ v: Double) -> some View {
         HStack(spacing: 4) {
-            if v < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
+            if v < 0 { RefundTag() }
             if store.hideAmounts {
                 Text("••••").font(.subheadline)
             } else {

@@ -358,7 +358,7 @@ private struct CategorySummaryRow: View {
             HStack(spacing: 0) {
                 title
                 Spacer(minLength: 8)
-                MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
+                CategoryTotalText(category: category, total: total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
                 share.font(.callout).monospacedDigit().frame(width: 64, alignment: .trailing)
                 change.font(.callout).monospacedDigit().frame(width: 110, alignment: .trailing)
                 Image(systemName: "chevron.right")
@@ -370,7 +370,7 @@ private struct CategorySummaryRow: View {
                 title
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
-                    MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17))
+                    CategoryTotalText(category: category, total: total).font(.system(size: 17))
                     HStack(spacing: 8) {
                         if !category.isLiability, gross > 0 { share }
                         change
@@ -402,7 +402,7 @@ private struct CategoryOverview: View {
             Label(category.isLiability ? "本期應繳合計" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
-            MoneyText(value: category.isLiability ? -total : total)
+            CategoryTotalText(category: category, total: total)
                 .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
@@ -491,11 +491,25 @@ private struct LiabilityGroupRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                MoneyText(value: owed).font(.title3.weight(.semibold))
+                OwedAmount(owed: owed).font(.title3.weight(.semibold))
                 if let old { LiabilityChange(now: owed, before: old).font(.caption) }
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+/// 分類合計：負債顯示要繳的正數，退款用「退款」標籤（跟帳戶列一致）
+private struct CategoryTotalText: View {
+    let category: AssetCategory
+    let total: Double
+
+    var body: some View {
+        if category.isLiability {
+            OwedAmount(owed: -total)
+        } else {
+            MoneyText(value: total)
+        }
     }
 }
 
@@ -659,20 +673,15 @@ struct AccountRow: View {
                 if account.category.isLiability && !hasAmount {
                     Text("本期無帳單").foregroundStyle(.secondary)
                 } else {
-                    // 負債顯示為正的應繳金額，比較直覺；負數代表有退款（溢繳），標成「退款」
-                    if nested {
+                    // 負債顯示為正的應繳金額；退款（溢繳）用「退款」標籤，跟其他地方一致
+                    if account.category.isLiability {
+                        OwedAmount(owed: -value)
+                            .font(nested ? .subheadline : .body.weight(.medium))
+                            .foregroundStyle(nested ? .secondary : .primary)
+                    } else if nested {
                         MoneyText(value: value).font(.subheadline).foregroundStyle(.secondary)
-                    } else if account.category.isLiability && value > 0 {
-                        HStack(spacing: 6) {
-                            Text("退款").font(.caption.weight(.medium))
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.green.opacity(0.15), in: Capsule())
-                                .foregroundStyle(.green)
-                            MoneyText(value: value).fontWeight(.medium)
-                        }
                     } else {
-                        MoneyText(value: account.category.isLiability ? -value : value)
-                            .fontWeight(.medium)
+                        MoneyText(value: value).fontWeight(.medium)
                     }
                 }
                 change.font(.caption)

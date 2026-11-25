@@ -367,7 +367,11 @@ struct SnapshotDetailView: View {
                     HStack {
                         Text(cat.title)
                         Spacer()
-                        MoneyText(value: store.total(cat, in: snapshot))
+                        if cat.isLiability {
+                            OwedAmount(owed: -store.total(cat, in: snapshot))
+                        } else {
+                            MoneyText(value: store.total(cat, in: snapshot))
+                        }
                     }
                 }
             }
