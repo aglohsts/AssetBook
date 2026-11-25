@@ -383,6 +383,12 @@ final class PortfolioStore {
         var seen = Set<UUID>()
         var out: [BillEvent] = []
         for a in activeAccounts(in: .liability) where !seen.contains(a.id) {
+            // 貸款：每月固定扣款
+            if a.isLoan {
+                seen.insert(a.id)
+                out += a.loanEvents(from: from, within: days)
+                continue
+            }
             let group = billGroup(for: a)
             group.forEach { seen.insert($0.id) }
             // 用整組的日期算，代表帳戶選有設定日期的那一張

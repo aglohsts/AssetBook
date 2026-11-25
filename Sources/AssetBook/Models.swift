@@ -213,6 +213,12 @@ struct Account: Identifiable, Codable, Hashable {
     var dueDate: BillDate?
     /// 和同一間銀行的其他卡共用結帳日、繳費日；nil 表示自動（名稱有「未出帳」的不共用）
     var shareBillDates: Bool?
+    /// 負債的種類：信用卡或貸款；nil 表示依名稱判斷（有「貸」的是貸款）
+    var liabilityType: LiabilityType?
+    /// 貸款：每月幾號扣款、每月繳多少（帳戶金額是剩餘本金，不是每月要繳的錢）、從哪天開始繳（寬限期）
+    var loanPaymentDay: Int?
+    var loanMonthlyPayment: Double?
+    var loanStartDate: Date?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
@@ -229,7 +235,8 @@ struct Account: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate, shareBillDates
+        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate, shareBillDates,
+             liabilityType, loanPaymentDay, loanMonthlyPayment, loanStartDate
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -247,6 +254,10 @@ struct Account: Identifiable, Codable, Hashable {
         statementDate = try c.decodeIfPresent(BillDate.self, forKey: .statementDate)
         dueDate = try c.decodeIfPresent(BillDate.self, forKey: .dueDate)
         shareBillDates = try c.decodeIfPresent(Bool.self, forKey: .shareBillDates)
+        liabilityType = try c.decodeIfPresent(LiabilityType.self, forKey: .liabilityType)
+        loanPaymentDay = try c.decodeIfPresent(Int.self, forKey: .loanPaymentDay)
+        loanMonthlyPayment = try c.decodeIfPresent(Double.self, forKey: .loanMonthlyPayment)
+        loanStartDate = try c.decodeIfPresent(Date.self, forKey: .loanStartDate)
     }
 
     /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
@@ -322,6 +333,13 @@ struct Snapshot: Identifiable, Codable, Hashable {
 
 // MARK: - 結帳日與繳費日
 
+/// 負債的種類：信用卡（每期結帳、繳費日會變）或貸款（每月固定扣款）
+enum LiabilityType: String, Codable, CaseIterable, Identifiable {
+    case card, loan
+    var id: Self { self }
+    var title: String { self == .card ? "信用卡" : "貸款" }
+}
+
 /// 使用者設定的一個實際日期（例如這期 12/3 繳費）。遇到假日可能提早或延後，所以存日期而不是「每月幾號」
 struct BillDate: Codable, Hashable {
     var date: Date
@@ -338,10 +356,12 @@ struct BillEvent: Identifiable, Hashable {
     let date: Date
     /// 從上次設定的日期自動帶到之後的月份（同一天），還沒確認過；遇到假日可能不同
     let needsConfirm: Bool
+    /// 貸款：每月繳款金額（帳戶本身的金額是剩餘本金）
+    var loanPayment: Double? = nil
     var id: String { "\(account.id)-\(kind.rawValue)-\(date.timeIntervalSince1970)" }
     /// 月曆上的短字
     var shortTitle: String { kind == .due ? "繳" : "結" }
-    var title: String { kind == .due ? "繳費" : "結帳" }
+    var title: String { kind == .due ? (account.isLoan ? "扣款" : "繳費") : "結帳" }
     /// 一張卡用帳戶名稱；同銀行多張卡用銀行名稱
     var name: String { accounts.count > 1 ? (account.bankName ?? account.name) : account.name }
     /// 同銀行多張卡時，列出各張卡的名稱（去掉銀行名稱比較短）
@@ -367,8 +387,39 @@ extension Calendar {
 extension Account {
     func billDate(_ kind: BillEvent.Kind) -> BillDate? { kind == .due ? dueDate : statementDate }
 
-    /// 是否和同銀行的卡共用日期（預設：名稱有「未出帳」的不共用）
-    var sharesBillDates: Bool { shareBillDates ?? !name.contains("未出帳") }
+    /// 負債種類：自己選的優先，否則名稱有「貸」的是貸款
+    var resolvedLiabilityType: LiabilityType { liabilityType ?? (name.contains("貸") ? .loan : .card) }
+    var isLoan: Bool { category.isLiability && resolvedLiabilityType == .loan }
+
+    /// 是否和同銀行的卡共用日期（預設：名稱有「未出帳」的不共用；貸款不共用）
+    var sharesBillDates: Bool { !isLoan && (shareBillDates ?? !name.contains("未出帳")) }
+
+    /// 貸款：還沒開始繳（寬限期中）
+    func loanNotStarted(asOf date: Date = .now) -> Bool {
+        guard isLoan, let start = loanStartDate else { return false }
+        return Calendar.current.startOfDay(for: start) > Calendar.current.startOfDay(for: date)
+    }
+
+    /// 貸款：from 起 within 天內的每月扣款日（固定日期，不用確認；開始繳費日之前不算）
+    func loanEvents(from: Date, within days: Int, calendar cal: Calendar = .current) -> [BillEvent] {
+        guard isLoan, let day = loanPaymentDay else { return [] }
+        var start = cal.startOfDay(for: from)
+        guard let end = cal.date(byAdding: .day, value: days, to: start) else { return [] }
+        if let s = loanStartDate { start = max(start, cal.startOfDay(for: s)) }
+        var out: [BillEvent] = []
+        var month = start
+        for _ in 0..<24 {
+            guard let d = cal.date(day: day, inMonthOf: month) else { break }
+            if d > end { break }
+            if d >= start {
+                out.append(BillEvent(account: self, accounts: [self], kind: .due, date: d, needsConfirm: false,
+                                     loanPayment: loanMonthlyPayment))
+            }
+            guard let next = cal.date(byAdding: .month, value: 1, to: month) else { break }
+            month = next
+        }
+        return out
+    }
 
     /// 負債帳戶所屬的銀行（依圖示或名稱比對到的銀行網站）；認不出來就是 nil
     var bankDomain: String? {

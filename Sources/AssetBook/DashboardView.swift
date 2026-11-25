@@ -1013,9 +1013,14 @@ private struct UpcomingBillsCard: View {
     @State private var editing: BillEvent?
     @State private var draftDate = Date.now
 
+    /// 還在寬限期、還不用繳的貸款
+    private var notStartedLoans: [Account] {
+        store.activeAccounts(in: .liability).filter { $0.loanNotStarted() && $0.loanPaymentDay != nil }
+    }
+
     var body: some View {
         let events = events
-        if !events.isEmpty {
+        if !events.isEmpty || !notStartedLoans.isEmpty {
             Card {
                 HStack(alignment: .firstTextBaseline) {
                     Text("繳費與結帳").font(.headline.weight(.medium))
@@ -1031,12 +1036,12 @@ private struct UpcomingBillsCard: View {
                 let statement = events.filter { $0.kind == .statement }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
-                        column("繳費", systemImage: "creditcard", events: due)
+                        column("繳費", systemImage: "creditcard", events: due, loans: notStartedLoans)
                         column("結帳", systemImage: "doc.text", events: statement)
                     }
                     .frame(minWidth: 640)
                     VStack(alignment: .leading, spacing: 16) {
-                        column("繳費", systemImage: "creditcard", events: due)
+                        column("繳費", systemImage: "creditcard", events: due, loans: notStartedLoans)
                         column("結帳", systemImage: "doc.text", events: statement)
                     }
                 }
@@ -1044,7 +1049,7 @@ private struct UpcomingBillsCard: View {
         }
     }
 
-    private func column(_ title: String, systemImage: String, events: [BillEvent]) -> some View {
+    private func column(_ title: String, systemImage: String, events: [BillEvent], loans: [Account] = []) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Label(title, systemImage: systemImage)
                 .font(.subheadline.weight(.medium))
@@ -1059,13 +1064,26 @@ private struct UpcomingBillsCard: View {
                     }
                 }
             }
+            // 寬限期中的貸款：還不用繳，標出開始繳費的日期
+            ForEach(loans) { a in
+                if let start = a.loanStartDate {
+                    Label("\(a.name)：\(start.formatted(.dateTime.year().month(.defaultDigits).day())) 起開始繳",
+                          systemImage: "hourglass")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     /// 點一列可以確認或改日期（遇到假日不同天）
     private func row(_ e: BillEvent) -> some View {
-        Button {
+        if e.account.isLoan {
+            // 貸款每月固定日期扣款，不用確認；要改到帳戶編輯
+            return AnyView(rowContent(e).help("每月 \(e.account.loanPaymentDay ?? 0) 號扣款，可在帳戶編輯修改"))
+        }
+        return AnyView(Button {
             draftDate = e.date
             editing = e
         } label: {
@@ -1100,7 +1118,7 @@ private struct UpcomingBillsCard: View {
             }
             .padding()
             .frame(width: 300)
-        }
+        })
     }
 
     private func rowContent(_ e: BillEvent) -> some View {
@@ -1108,7 +1126,10 @@ private struct UpcomingBillsCard: View {
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
         let urgent = e.kind == .due && days <= 3
         // 應繳金額：各張卡換成台幣加總；外幣另外列出原幣金額
-        let owed = e.accounts.compactMap { a in record.amounts[a.id].map { (a, $0) } }.filter { $0.1 != 0 }
+        // 貸款用每月繳款金額（帳戶金額是剩餘本金）
+        let owed = e.account.isLoan
+            ? (e.loanPayment.map { [(e.account, $0)] } ?? [])
+            : e.accounts.compactMap { a in record.amounts[a.id].map { (a, $0) } }.filter { $0.1 != 0 }
         let totalTWD = owed.reduce(0) { $0 + $1.1 * store.rate($1.0.currency, in: record) }
         let foreign = owed.filter { $0.0.currency != .twd }
         return HStack(spacing: 12) {
