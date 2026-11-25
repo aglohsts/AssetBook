@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - 幣別
 
 enum Currency: String, CaseIterable, Identifiable, Codable, Hashable {
-    case twd = "TWD", usd = "USD", jpy = "JPY"
+    case twd = "TWD", usd = "USD", jpy = "JPY", gbp = "GBP"
 
     var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum Currency: String, CaseIterable, Identifiable, Codable, Hashable {
         case .twd: "NT$"
         case .usd: "US$"
         case .jpy: "¥"
+        case .gbp: "£"
         }
     }
 
@@ -20,16 +21,18 @@ enum Currency: String, CaseIterable, Identifiable, Codable, Hashable {
         case .twd: "新台幣"
         case .usd: "美元"
         case .jpy: "日圓"
+        case .gbp: "英鎊"
         }
     }
 
-    var fractionDigits: Int { self == .usd ? 2 : 0 }
+    var fractionDigits: Int { self == .usd || self == .gbp ? 2 : 0 }
 
     var tint: Color {
         switch self {
         case .twd: .indigo
         case .usd: .teal
         case .jpy: .pink
+        case .gbp: .purple
         }
     }
 }
@@ -88,7 +91,7 @@ enum AssetCategory: String, CaseIterable, Identifiable, Codable, Hashable {
 
 /// 每次更新時需要填的報價：匯率（以台幣計）與加密貨幣價格（以美元計）。
 enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
-    case usdTWD, jpyTWD, btcUSD, croUSD
+    case usdTWD, jpyTWD, gbpTWD, btcUSD, croUSD
 
     var id: String { rawValue }
 
@@ -96,6 +99,7 @@ enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .usdTWD: "美元匯率"
         case .jpyTWD: "日圓匯率"
+        case .gbpTWD: "英鎊匯率"
         case .btcUSD: "比特幣"
         case .croUSD: "Cronos"
         }
@@ -105,6 +109,7 @@ enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .usdTWD: "TWD/USD"
         case .jpyTWD: "TWD/JPY"
+        case .gbpTWD: "TWD/GBP"
         case .btcUSD, .croUSD: "USD"
         }
     }
@@ -122,6 +127,7 @@ enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .usdTWD: "dollarsign.circle"
         case .jpyTWD: "yensign.circle"
+        case .gbpTWD: "sterlingsign.circle"
         case .btcUSD: "bitcoinsign.circle"
         case .croUSD: "c.circle"
         }
@@ -132,6 +138,7 @@ enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .usdTWD: 4
         case .jpyTWD: 6
+        case .gbpTWD: 4
         case .btcUSD: 0
         case .croUSD: 5
         }

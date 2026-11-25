@@ -485,6 +485,7 @@ private struct CompositionCard: View {
         case .twd: "dollarsign.circle.fill"
         case .usd: "dollarsign.square.fill"
         case .jpy: "yensign.circle.fill"
+        case .gbp: "sterlingsign.circle.fill"
         }
     }
 
