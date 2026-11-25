@@ -708,8 +708,8 @@ private struct CompositionCard: View {
     /// 負債是現金要還掉的部分：在「現金與存款」（幣別分組時是台幣）那一塊裡面畫一條更細的灰線，
     /// 長度是負債佔現金的比例。現金本身完整呈現
     private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
-    /// 負債的顏色：跟 App 其他地方的負債一樣用紅色，不透明，才不會跟現金的綠色混在一起
-    static let debtColor = AssetCategory.liability.tint
+    /// 負債的顏色：現金綠色的深色版，看起來像是從現金那塊挖掉的部分（紅配綠太衝）
+    static let debtColor = Color(hue: 0.40, saturation: 0.85, brightness: 0.36)
 
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
