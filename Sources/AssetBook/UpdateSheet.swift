@@ -496,7 +496,7 @@ private struct DraftRow: View {
                 .monospacedDigit()
                 .frame(maxWidth: 170)
                 #if os(iOS)
-                .keyboardType(.decimalPad)
+                .keyboardType(.numbersAndPunctuation)
                 #else
                 .textFieldStyle(.roundedBorder)
                 #endif
@@ -513,6 +513,13 @@ private struct DraftRow: View {
     @ViewBuilder private var subtitle: some View {
         if isInvalid {
             Text("無法辨識的數字").foregroundStyle(.red)
+        } else if Fmt.isFormula(text), let parsed {
+            // 輸入的是算式：顯示算出來的結果
+            HStack(spacing: 6) {
+                Text("= \(Fmt.number(parsed, digits: previousDigits))")
+                    .fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                if let previous { Text("上次 \(Fmt.number(previous, digits: previousDigits))") }
+            }
         } else if let previous {
             HStack(spacing: 6) {
                 Text("上次 \(Fmt.number(previous, digits: previousDigits))")

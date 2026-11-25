@@ -38,12 +38,120 @@ enum Fmt {
         return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
     }
 
-    /// 解析使用者輸入，允許千分位逗號與空白。
+    /// 解析使用者輸入，允許千分位逗號與空白，也可以像試算表一樣輸入算式
+    /// （例如 `=2000+3953+7917`、`12000*0.998`、`(100+50)/3`）。
     static func parse(_ s: String) -> Double? {
         let cleaned = s.replacingOccurrences(of: ",", with: "")
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "−", with: "-")
-        return cleaned.isEmpty ? nil : Double(cleaned)
+        guard !cleaned.isEmpty else { return nil }
+        if let plain = Double(cleaned) { return plain }
+        return Formula.evaluate(cleaned)
+    }
+
+    /// 輸入的是算式（而不是單純的數字）
+    static func isFormula(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && Double(t.replacingOccurrences(of: ",", with: "")) == nil && parse(t) != nil
+    }
+}
+
+/// 簡單的算式計算：+ − × ÷、括號、正負號、百分比，開頭的 `=` 可有可無。
+/// 手寫遞迴下降，不用 NSExpression，避免輸入怪字串時直接崩潰。
+enum Formula {
+    static func evaluate(_ input: String) -> Double? {
+        var chars = Array(normalize(input))
+        if chars.first == "=" { chars.removeFirst() }
+        var parser = Parser(chars: chars)
+        guard let value = parser.expression(), parser.atEnd, value.isFinite else { return nil }
+        return value
+    }
+
+    private static func normalize(_ s: String) -> String {
+        var out = ""
+        for ch in s {
+            switch ch {
+            case "＋": out.append("+")
+            case "－", "−", "–": out.append("-")
+            case "×", "x", "X", "＊": out.append("*")
+            case "÷", "／": out.append("/")
+            case "（": out.append("(")
+            case "）": out.append(")")
+            case "＝": out.append("=")
+            case " ": continue
+            default: out.append(ch)
+            }
+        }
+        return out
+    }
+
+    private struct Parser {
+        let chars: [Character]
+        var pos = 0
+        var atEnd: Bool { pos >= chars.count }
+        private var peek: Character? { pos < chars.count ? chars[pos] : nil }
+
+        init(chars: [Character]) { self.chars = chars }
+
+        // expression = term (("+" | "-") term)*
+        mutating func expression() -> Double? {
+            guard var value = term() else { return nil }
+            while let c = peek, c == "+" || c == "-" {
+                pos += 1
+                guard let rhs = term() else { return nil }
+                value = c == "+" ? value + rhs : value - rhs
+            }
+            return value
+        }
+
+        // term = unary (("*" | "/") unary)*
+        private mutating func term() -> Double? {
+            guard var value = unary() else { return nil }
+            while let c = peek, c == "*" || c == "/" {
+                pos += 1
+                guard let rhs = unary() else { return nil }
+                if c == "/" && rhs == 0 { return nil }
+                value = c == "*" ? value * rhs : value / rhs
+            }
+            return value
+        }
+
+        // unary = ("+" | "-") unary | postfix
+        private mutating func unary() -> Double? {
+            if let c = peek, c == "+" || c == "-" {
+                pos += 1
+                guard let v = unary() else { return nil }
+                return c == "-" ? -v : v
+            }
+            return postfix()
+        }
+
+        // postfix = primary "%"*
+        private mutating func postfix() -> Double? {
+            guard var value = primary() else { return nil }
+            while peek == "%" { pos += 1; value /= 100 }
+            return value
+        }
+
+        // primary = number | "(" expression ")"
+        private mutating func primary() -> Double? {
+            if peek == "(" {
+                pos += 1
+                guard let v = expression(), peek == ")" else { return nil }
+                pos += 1
+                return v
+            }
+            let start = pos
+            var sawDigit = false, sawDot = false
+            while let c = peek {
+                if c.isASCII, c.isNumber { sawDigit = true }
+                else if c == ".", !sawDot { sawDot = true }
+                else { break }
+                pos += 1
+            }
+            guard sawDigit else { return nil }
+            return Double(String(chars[start..<pos]))
+        }
     }
 }
 
