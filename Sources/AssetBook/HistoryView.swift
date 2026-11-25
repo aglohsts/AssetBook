@@ -306,20 +306,8 @@ struct SnapshotDetailView: View {
             }
 
             Section("報價") {
-                ForEach(Quote.allCases) { q in
-                    let v = snapshot.quotes[q] ?? 0
-                    LabeledContent {
-                        HStack(spacing: 8) {
-                            Text(Fmt.number(v)).monospacedDigit()
-                            if let p = prev?.quotes[q], p != 0 {
-                                Text(Fmt.percent((v - p) / p))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(store.deltaColor(v - p))
-                            }
-                        }
-                    } label: {
-                        Label(q.title, systemImage: q.symbol)
-                    }
+                ForEach(Quote.allCases.filter { (snapshot.quotes[$0] ?? 0) != 0 }) { q in
+                    QuoteRow(quote: q, value: snapshot.quotes[q] ?? 0, previous: prev?.quotes[q])
                 }
             }
 
@@ -378,5 +366,45 @@ struct SnapshotDetailView: View {
     private func edit(_ account: Account) {
         guard isToday else { notTodayAlert = true; return }
         if account.isPortfolio { openUpdateSheet() } else { editingAccount = account }
+    }
+}
+
+/// 歷史明細裡的一列報價：灰色圖示、名稱下方標單位，數字依報價取合適的小數位數，
+/// 漲跌欄固定寬度（沒有上一筆就顯示「—」），整欄數字才會對齊
+private struct QuoteRow: View {
+    @Environment(\.portfolio) private var store
+    let quote: Quote
+    let value: Double
+    let previous: Double?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: quote.symbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(quote.title)
+                Text(quote.unit).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Text(quote.displayPrefix + Fmt.number(value, digits: quote.displayDigits...quote.displayDigits))
+                .monospacedDigit()
+            change
+                .font(.caption.monospacedDigit())
+                .frame(width: 64, alignment: .trailing)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private var change: some View {
+        if let previous, previous != 0 {
+            let pct = (value - previous) / previous
+            // 四捨五入後是 0.0% 的用灰色，不要紅綠
+            Text(Fmt.percent(pct))
+                .foregroundStyle(store.deltaColor(abs(pct) < 0.0005 ? 0 : value - previous))
+        } else {
+            Text("—").foregroundStyle(.tertiary)
+        }
     }
 }

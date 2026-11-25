@@ -144,6 +144,20 @@ enum Quote: String, CaseIterable, Identifiable, Codable, Hashable {
         }
     }
 
+    /// 顯示用的小數位數（存檔仍保留完整精度）
+    var displayDigits: Int {
+        switch self {
+        case .usdTWD: 3
+        case .jpyTWD: 4
+        case .gbpTWD: 3
+        case .btcUSD: 0
+        case .croUSD: 5
+        }
+    }
+
+    /// 顯示用的前綴：幣價以美元計
+    var displayPrefix: String { assetSymbol == nil ? "" : "US$" }
+
     static var holdable: [Quote] { allCases.filter { $0.assetSymbol != nil } }
 }
 
