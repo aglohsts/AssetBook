@@ -708,8 +708,9 @@ private struct CompositionCard: View {
     /// 負債是現金要還掉的部分：在「現金與存款」（幣別分組時是台幣）那一塊裡面畫一條更細的灰線，
     /// 長度是負債佔現金的比例。現金本身完整呈現
     private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
-    /// 負債的顏色：現金綠色的深色版，看起來像是從現金那塊挖掉的部分（紅配綠太衝）
-    static let debtColor = Color(hue: 0.40, saturation: 0.85, brightness: 0.36)
+    /// 負債的顏色：淺薄荷綠。跟現金同色系（紅配綠太衝），但比現金亮，
+    /// 現金那塊變淡時（滑到負債）也看得清楚；深綠在深色背景和變淡的現金上都太不明顯
+    static let debtColor = Color(hue: 0.42, saturation: 0.28, brightness: 0.95)
 
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
@@ -877,7 +878,8 @@ private struct DonutChart: View {
     /// 段落中間的細線：跟著那一段一起淡出、一起進場
     @ViewBuilder private func insetLine(_ inset: Inset, in arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
         let visibleStart = arc.start + gap / 2, visibleEnd = arc.end - gap / 2
-        let width: CGFloat = 7
+        // 滑到負債時變粗，現金那塊變淡，細線維持全亮
+        let width: CGFloat = selected == inset.id ? 11 : 7
         // 細線也是圓頭：兩端各縮半個細線寬，才不會凸出段落
         let capInset = width / 2 / (2 * .pi * radius)
         let length = max((visibleEnd - visibleStart) * CGFloat(min(max(inset.fraction, 0), 1)) - 2 * capInset, 0.0005)
@@ -1048,6 +1050,11 @@ private struct UpcomingBillsCard: View {
 
     @State private var editing: BillEvent?
     @State private var draftDate = Date.now
+    /// 貸款的預約轉帳設定（點貸款那一列時）
+    @State private var editingLoan: BillEvent?
+    @State private var loanScheduled = false
+    @State private var loanUntil = Date.now
+    @State private var loanTo: UUID?
 
     /// 還在寬限期、還不用繳的貸款
     private var notStartedLoans: [Account] {
@@ -1121,8 +1128,22 @@ private struct UpcomingBillsCard: View {
     /// 點一列可以確認或改日期（遇到假日不同天）
     private func row(_ e: BillEvent) -> some View {
         if e.account.isLoan {
-            // 貸款每月固定日期扣款，不用確認；要改到帳戶編輯
-            return AnyView(rowContent(e).help("每月 \(e.account.loanPaymentDay ?? 0) 號扣款，可在帳戶編輯修改"))
+            // 貸款每月固定日期扣款，日期不用確認；點一下設定預約轉帳到哪天、轉入哪個帳戶
+            return AnyView(Button {
+                let a = store.account(id: e.account.id) ?? e.account
+                loanScheduled = a.paymentScheduledUntil != nil
+                loanUntil = a.paymentScheduledUntil ?? e.date
+                loanTo = a.paymentAccountID
+                editingLoan = e
+            } label: {
+                rowContent(e).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("點一下設定預約轉帳")
+            .popover(item: Binding(get: { editingLoan?.id == e.id ? editingLoan : nil },
+                                   set: { if $0 == nil { editingLoan = nil } }), arrowEdge: .trailing) { ev in
+                loanPopover(ev)
+            })
         }
         return AnyView(Button {
             draftDate = e.date
@@ -1180,6 +1201,41 @@ private struct UpcomingBillsCard: View {
             .padding()
             .frame(width: 300)
         })
+    }
+
+    /// 貸款：設定預約轉帳到哪天、轉入哪個帳戶
+    private func loanPopover(_ ev: BillEvent) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(ev.account.name) · 扣款").font(.headline)
+            Text("每月 \(ev.account.loanPaymentDay ?? 0) 號扣款" +
+                 (ev.loanPayment.map { "，每期 " + Fmt.money($0, ev.account.currency) } ?? ""))
+                .font(.caption).foregroundStyle(.secondary)
+            if ev.account.autoDebit == true {
+                Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("已設定預約轉帳", isOn: $loanScheduled)
+                if loanScheduled {
+                    DatePicker("設定到", selection: $loanUntil, displayedComponents: .date)
+                    Picker("轉入帳戶", selection: $loanTo) {
+                        Text("不指定").tag(UUID?.none)
+                        ForEach(store.activeAccounts(in: .cash)) { a in Text(a.name).tag(UUID?.some(a.id)) }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { editingLoan = nil }
+                Button("儲存") {
+                    store.setLoanTransfer(until: loanScheduled ? loanUntil : nil, to: loanTo, for: ev.account.id)
+                    editingLoan = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(ev.account.autoDebit == true)
+            }
+        }
+        .padding()
+        .frame(width: 320)
     }
 
     /// 繳費方式：自動扣款、已設定預約轉帳，或還沒設定（快到期時變紅）

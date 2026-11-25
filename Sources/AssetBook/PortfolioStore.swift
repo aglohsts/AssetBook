@@ -432,6 +432,14 @@ final class PortfolioStore {
         })
     }
 
+    /// 貸款：預約轉帳設定到哪天、轉入哪個帳戶（until 為 nil 表示沒設定）
+    func setLoanTransfer(until: Date?, to transferAccount: UUID?, for accountID: UUID) {
+        guard let i = accounts.firstIndex(where: { $0.id == accountID }) else { return }
+        accounts[i].paymentScheduledUntil = until.map { Calendar.current.startOfDay(for: $0) }
+        accounts[i].paymentAccountID = until == nil ? nil : transferAccount
+        persist()
+    }
+
     /// 設定自動扣款；同銀行共用日期的卡一起改（同一個扣款帳戶）
     func setAutoDebit(_ on: Bool, for accountID: UUID) {
         guard let base = account(id: accountID) else { return }
