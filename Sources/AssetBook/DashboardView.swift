@@ -1188,6 +1188,22 @@ private struct UpcomingBillsCard: View {
         }
     }
 
+    private func amountLine(_ a: Account, _ v: Double) -> some View {
+        HStack(spacing: 4) {
+            if v < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
+            if store.hideAmounts {
+                Text("••••").font(.subheadline)
+            } else {
+                Text(Fmt.money(abs(v), a.currency)).font(.subheadline).monospacedDigit()
+                if a.currency != .twd {
+                    Text("（" + Fmt.money(abs(v) * store.rate(a.currency, in: record), .twd) + "）")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
     private func rowContent(_ e: BillEvent) -> some View {
         let cal = Calendar.current
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
@@ -1197,8 +1213,6 @@ private struct UpcomingBillsCard: View {
         let owed = e.account.isLoan
             ? (e.loanPayment.map { [(e.account, $0)] } ?? [])
             : e.accounts.compactMap { a in record.amounts[a.id].map { (a, $0) } }.filter { $0.1 != 0 }
-        let totalTWD = owed.reduce(0) { $0 + $1.1 * store.rate($1.0.currency, in: record) }
-        let foreign = owed.filter { $0.0.currency != .twd }
         return HStack(spacing: 12) {
             AccountAvatar(account: e.account, size: 30)
             VStack(alignment: .leading, spacing: 1) {
@@ -1210,16 +1224,10 @@ private struct UpcomingBillsCard: View {
             }
             Spacer(minLength: 8)
             if e.kind == .due, !owed.isEmpty {
-                VStack(alignment: .trailing, spacing: 1) {
-                    HStack(spacing: 4) {
-                        if totalTWD < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
-                        MoneyText(value: abs(totalTWD)).font(.subheadline)
-                    }
-                    if !foreign.isEmpty {
-                        // 原幣金額，例如 ¥15,000（有台幣卡一起時也列出，才看得出怎麼加總）
-                        Text(owed.map { Fmt.money($0.1, $0.0.currency) }.joined(separator: " + "))
-                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                            .lineLimit(1)
+                // 每張卡各一行、分開繳，不合計：外幣寫原幣並附台幣換算，負數是退款
+                VStack(alignment: .trailing, spacing: 2) {
+                    ForEach(owed, id: \.0.id) { a, v in
+                        amountLine(a, v)
                     }
                 }
             }
