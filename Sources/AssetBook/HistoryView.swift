@@ -271,9 +271,23 @@ private struct DayCell: View {
 
 struct SnapshotDetailView: View {
     @Environment(\.portfolio) private var store
+    /// 點進來時的那筆紀錄；畫面上顯示的是這一天在 store 裡最新的版本（修改後會馬上更新）
     let snapshot: Snapshot
+    @State private var notTodayAlert = false
+
+    /// 同一天的最新紀錄：手動記錄優先，其次自動估值點，都找不到才用點進來時的資料
+    private var current: Snapshot {
+        let cal = Calendar.current
+        return store.snapshots.last { cal.isDate($0.date, inSameDayAs: snapshot.date) }
+            ?? store.autoSnapshots.last { cal.isDate($0.date, inSameDayAs: snapshot.date) }
+            ?? snapshot
+    }
+
+    /// 只能修改今天的紀錄（以按下去的當下判斷，畫面開著跨過午夜也不會改到舊的一天）
+    private var isToday: Bool { Calendar.current.isDateInToday(snapshot.date) }
 
     var body: some View {
+        let snapshot = current
         let prev = store.snapshot(before: snapshot)
         List {
             Section {
@@ -322,5 +336,23 @@ struct SnapshotDetailView: View {
             }
         }
         .navigationTitle(snapshot.date.formatted(.dateTime.year().month().day()))
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    guard isToday else { notTodayAlert = true; return }
+                    store.isUpdatingTodayOnly = true
+                    store.isUpdating = true
+                } label: {
+                    Label("修改", systemImage: "square.and.pencil")
+                }
+                .disabled(!isToday)
+                .help(isToday ? "修改今天的紀錄（⌘U）" : "只能修改今天的紀錄")
+            }
+        }
+        .alert("只能修改今天的紀錄", isPresented: $notTodayAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("這筆是 \(snapshot.date.formatted(.dateTime.month().day())) 的紀錄，過去的紀錄不能修改。")
+        }
     }
 }

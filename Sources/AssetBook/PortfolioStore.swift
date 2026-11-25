@@ -37,6 +37,8 @@ final class PortfolioStore {
 
     // 介面狀態
     var isUpdating = false
+    /// 從歷史紀錄打開「更新資產」：只能修改今天，日期固定不能改
+    var isUpdatingTodayOnly = false
     var isAddingAccount = false
     var isExporting = false
     /// 匯出成試算表（CSV）
