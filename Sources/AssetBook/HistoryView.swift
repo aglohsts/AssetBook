@@ -285,13 +285,21 @@ struct SnapshotDetailView: View {
             ?? snapshot
     }
 
-    /// 只能修改今天的紀錄（以按下去的當下判斷，畫面開著跨過午夜也不會改到舊的一天）
-    private var isToday: Bool { Calendar.current.isDateInToday(snapshot.date) }
+    /// 判斷「今天」用的時間：打開畫面、按下修改、跨過午夜時都會更新
+    @State private var now = Date.now
+    @State private var dayEndedAlert = false
+
+    /// 只能修改今天的紀錄；過了那天就變成唯讀
+    private var isToday: Bool { Calendar.current.isDate(snapshot.date, inSameDayAs: now) }
 
     var body: some View {
         let snapshot = current
         let prev = store.snapshot(before: snapshot)
         List {
+            Section {
+                editNotice
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
@@ -338,17 +346,36 @@ struct SnapshotDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    guard isToday else { notTodayAlert = true; return }
                     openUpdateSheet()
                 } label: {
-                    Label("修改", systemImage: "square.and.pencil")
+                    if isToday {
+                        Label("修改", systemImage: "square.and.pencil")
+                    } else {
+                        Label("已鎖定", systemImage: "lock")
+                    }
                 }
                 .disabled(!isToday)
-                .help(isToday ? "修改今天的紀錄（⌘U）" : "只能修改今天的紀錄")
+                .help(isToday ? "修改今天的紀錄（⌘U）" : "過去的紀錄，只能查看")
             }
         }
         .sheet(item: $editingAccount) { a in
             AmountEditor(account: a, target: current).environment(\.portfolio, store)
+        }
+        .onAppear { now = .now }
+        // 畫面開著跨過午夜：這一頁馬上變成唯讀，正在修改的視窗也關掉，避免存到已經過去的那一天
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            let wasToday = isToday
+            now = .now
+            guard wasToday, !isToday else { return }
+            let editing = editingAccount != nil || (store.isUpdating && store.isUpdatingTodayOnly)
+            editingAccount = nil
+            if store.isUpdatingTodayOnly { store.isUpdating = false }
+            if editing { dayEndedAlert = true }
+        }
+        .alert("這一天已經結束", isPresented: $dayEndedAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("已過午夜，這筆變成過去的紀錄，修改沒有儲存。要記錄今天的數字，請從總覽按「更新資產」。")
         }
         .alert("只能修改今天的紀錄", isPresented: $notTodayAlert) {
             Button("好", role: .cancel) {}
@@ -357,13 +384,41 @@ struct SnapshotDetailView: View {
         }
     }
 
+    /// 頁面最上方的提示：今天可以修改；過去的紀錄只能查看
+    @ViewBuilder private var editNotice: some View {
+        if isToday {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("今天的紀錄")
+                    Text("點任一項目可以直接修改，過了今天就會鎖定。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "square.and.pencil").foregroundStyle(Color.accentColor)
+            }
+        } else {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("過去的紀錄")
+                    Text("只能查看，不能修改。只有當天的紀錄可以修改。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "lock.fill").foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private func openUpdateSheet() {
+        now = .now
+        guard isToday else { notTodayAlert = true; return }
         store.isUpdatingTodayOnly = true
         store.isUpdating = true
     }
 
     /// 點單一項目：一般帳戶只改這一項的金額；持股帳戶要改股數，改用完整的更新畫面
     private func edit(_ account: Account) {
+        now = .now
         guard isToday else { notTodayAlert = true; return }
         if account.isPortfolio { openUpdateSheet() } else { editingAccount = account }
     }
