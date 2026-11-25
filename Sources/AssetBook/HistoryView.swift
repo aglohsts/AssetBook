@@ -171,7 +171,7 @@ struct HistoryView: View {
             let delta = store.netWorth(last) - store.netWorth(baseline)
             let autoCount = store.autoSnapshots.filter { cal.isDate($0.date, equalTo: month, toGranularity: .month) }.count
             HStack(spacing: 8) {
-                Text("本月 \(inMonth.count) 筆紀錄" + (autoCount > 0 ? "、\(autoCount) 天估算（≈）" : ""))
+                Text("本月 \(inMonth.count) 筆紀錄" + (autoCount > 0 ? "、\(autoCount) 天估算" : ""))
                 if baseline.id != last.id {
                     Text("·")
                     DeltaText(delta: delta)
@@ -229,7 +229,7 @@ private struct DayCell: View {
     let day: Date
     let snapshot: Snapshot?
     let previous: Snapshot?
-    /// 估算（自動估值點）：數字前加 ≈、虛線框
+    /// 估算（自動估值點）：數字前加虛線圓圈、虛線框
     var isAuto = false
     /// 這天的結帳日、繳費日
     var bills: [BillEvent] = []
@@ -246,8 +246,9 @@ private struct DayCell: View {
             if let snapshot {
                 let net = store.netWorth(snapshot)
                 Spacer(minLength: 0)
-                // 沒記錄、App 自己估的那天前面加 ≈
-                Text((isAuto ? "≈ " : "") + (store.hideAmounts ? "••" : Fmt.wan(net)))
+                // 沒記錄、App 自己估的那天前面加虛線圓圈
+                ((isAuto ? Text("\(Image(systemName: "circle.dashed")) ") : Text(""))
+                    + Text(store.hideAmounts ? "••" : Fmt.wan(net)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(isAuto ? Color.secondary : Color.primary)
                     .lineLimit(1)
@@ -328,7 +329,9 @@ struct SnapshotDetailView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        if store.isAuto(snapshot) { Text("≈").foregroundStyle(.secondary) }
+                        if store.isAuto(snapshot) {
+                            Image(systemName: "circle.dashed").font(.system(size: 22)).foregroundStyle(.secondary)
+                        }
                         MoneyText(value: store.netWorth(snapshot))
                     }
                     .font(.system(size: 34, weight: .regular))
@@ -416,13 +419,13 @@ struct SnapshotDetailView: View {
         let base = store.snapshots.last { $0.date < s.date }
         return Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text("≈ 估算 · 這天沒有記錄")
+                Text("估算 · 這天沒有記錄")
                 Text(base.map { "餘額沿用 \($0.date.formatted(.dateTime.month(.defaultDigits).day()))，股價和匯率用當天的。" }
                      ?? "股價和匯率用當天的。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         } icon: {
-            Text("≈").font(.title3).foregroundStyle(.secondary)
+            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
         }
     }
 

@@ -121,10 +121,15 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                // 估算的數字前面加 ≈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
+                // 估算的數字前面加虛線圓圈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
                 let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if isEstimate { Text("≈").foregroundStyle(.secondary) }
+                    if isEstimate {
+                        Image(systemName: "circle.dashed")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
+                    }
                     MoneyText(value: selected?.value ?? net)
                 }
                 .font(.system(size: 48, weight: .regular))
@@ -302,7 +307,7 @@ private struct NetWorthCard: View {
                     .foregroundStyle(color)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.monotone)
-                // 每個記錄日一個點：有記錄是實心點，估算（≈）是空心點
+                // 每個記錄日一個點：有記錄是實心點，估算是空心點
                 if p.isAuto {
                     PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
                         .symbol {
