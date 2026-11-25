@@ -120,15 +120,21 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                MoneyText(value: selected?.value ?? net)
-                    .font(.system(size: 48, weight: .regular))
-                    .minimumScaleFactor(0.6)
-                    .lineLimit(1)
+                // 估算的數字前面加 ≈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
+                let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if isEstimate { Text("≈").foregroundStyle(.secondary) }
+                    MoneyText(value: selected?.value ?? net)
+                }
+                .font(.system(size: 48, weight: .regular))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
                 HStack(spacing: 8) {
                     if let selected, let first = pts.first {
                         // 拖曳中：和區間起點比較
                         DeltaBadge(delta: selected.value - first.value, base: first.value)
-                        Text(selected.isLive ? "即時 vs 區間起點" : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day())) vs 區間起點")
+                        Text(selected.isLive ? "即時估算 vs 區間起點"
+                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day()))\(selected.isAuto ? " 估算" : "") vs 區間起點")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     } else if let comparison {
@@ -218,7 +224,7 @@ private struct NetWorthCard: View {
                         .foregroundStyle(.orange)
                 default:
                     Label {
-                        Text("淨資產 · 即時 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened))")
+                        Text("淨資產 · 即時估算 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened)) · 餘額沿用 \(record.date.formatted(.dateTime.month(.defaultDigits).day()))")
                     } icon: {
                         Circle().fill(.green).frame(width: 7, height: 7)
                     }
@@ -287,10 +293,19 @@ private struct NetWorthCard: View {
                     .foregroundStyle(color)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.monotone)
-                // 每個記錄日一個點：手動記錄是實心，自動估值點是小的淡點
-                PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
-                    .symbolSize(p.isAuto ? 14 : 32)
-                    .foregroundStyle(p.isAuto ? color.opacity(0.45) : color)
+                // 每個記錄日一個點：有記錄是實心點，估算（≈）是空心點
+                if p.isAuto {
+                    PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
+                        .symbol {
+                            Circle().strokeBorder(color, lineWidth: 1.5)
+                                .background(Circle().fill(Color.cardBackground))
+                                .frame(width: 7, height: 7)
+                        }
+                } else {
+                    PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
+                        .symbolSize(32)
+                        .foregroundStyle(color)
+                }
             }
             if let livePoint = pts.last, livePoint.isLive, let lastRecord = recorded.last {
                 ForEach([lastRecord, livePoint]) { p in
