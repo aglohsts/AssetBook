@@ -971,10 +971,12 @@ struct AccountEditor: View {
     @State private var statementDate: Date?
     @State private var dueDate: Date?
     /// 打開時的值，用來判斷有沒有改過（沒改就保留原本存的日期）
-    private let initialStatementDate: Date?
-    private let initialDueDate: Date?
+    @State private var initialStatementDate: Date?
+    @State private var initialDueDate: Date?
     /// 打開時就已經自動帶到下個月、需要確認的項目
-    private let rolledKinds: Set<BillEvent.Kind>
+    @State private var rolledKinds: Set<BillEvent.Kind> = []
+    /// 和同銀行的卡共用日期
+    @State private var shareBillDates: Bool
     @State private var confirmDelete = false
 
     // 圖示
@@ -1034,21 +1036,7 @@ struct AccountEditor: View {
         _currency = State(initialValue: account?.currency ?? .twd)
         _usesPortfolio = State(initialValue: account.map(\.isPortfolio) ?? (category == .stocks))
         _cashGroup = State(initialValue: account?.cashGroup)
-        // 已經過了的日期，預設帶到下一次（同一天），並提醒確認
-        var rolled: Set<BillEvent.Kind> = []
-        func upcoming(_ kind: BillEvent.Kind) -> Date? {
-            guard let account, let set = account.billDate(kind) else { return nil }
-            if Calendar.current.startOfDay(for: set.date) >= Calendar.current.startOfDay(for: .now) { return set.date }
-            let next = account.billEvents(from: .now, within: 62).first { $0.kind == kind }
-            if next != nil { rolled.insert(kind) }
-            return next?.date ?? set.date
-        }
-        let s = upcoming(.statement), d = upcoming(.due)
-        _statementDate = State(initialValue: s)
-        _dueDate = State(initialValue: d)
-        initialStatementDate = s
-        initialDueDate = d
-        rolledKinds = rolled
+        _shareBillDates = State(initialValue: account?.sharesBillDates ?? true)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1152,6 +1140,17 @@ struct AccountEditor: View {
 
                 if category.isLiability {
                     Section {
+                        if let account, account.bankDomain != nil {
+                            Toggle(isOn: $shareBillDates) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("和同一間銀行的卡共用日期")
+                                    if !bankMates.isEmpty {
+                                        Text("一起設定：" + bankMates.map(\.name).joined(separator: "、"))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
                         billDateRow("繳費日", kind: .due, date: $dueDate)
                         billDateRow("結帳日", kind: .statement, date: $statementDate)
                     } header: {
@@ -1229,6 +1228,7 @@ struct AccountEditor: View {
                 }
             }
             .formStyle(.grouped)
+            .onAppear(perform: loadBillDates)
             .navigationTitle(isNew ? category.addTitle : "編輯「\(account?.name ?? "")」")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -1258,6 +1258,32 @@ struct AccountEditor: View {
         #if os(macOS)
         .frame(minWidth: 460, minHeight: isNew ? 380 : 460)
         #endif
+    }
+
+    /// 打開編輯時載入日期：用整組（同銀行共用）的日期；已經過了的帶到下一次（同一天），並提醒確認
+    private func loadBillDates() {
+        guard let account, account.category.isLiability else { return }
+        var rolled: Set<BillEvent.Kind> = []
+        func upcoming(_ kind: BillEvent.Kind) -> Date? {
+            guard let set = account.sharesBillDates ? store.groupBillDate(kind, for: account) : account.billDate(kind)
+            else { return nil }
+            if Calendar.current.startOfDay(for: set.date) >= Calendar.current.startOfDay(for: .now) { return set.date }
+            var probe = account
+            if kind == .due { probe.dueDate = set } else { probe.statementDate = set }
+            let next = probe.billEvents(from: .now, within: 62).first { $0.kind == kind }
+            if next != nil { rolled.insert(kind) }
+            return next?.date ?? set.date
+        }
+        let s = upcoming(.statement), d = upcoming(.due)
+        statementDate = s; dueDate = d
+        initialStatementDate = s; initialDueDate = d
+        rolledKinds = rolled
+    }
+
+    /// 同銀行、會一起共用日期的其他卡（顯示在開關下方）
+    private var bankMates: [Account] {
+        guard let account, let bank = account.bankDomain else { return [] }
+        return store.activeAccounts(in: .liability).filter { $0.id != account.id && $0.bankDomain == bank && $0.sharesBillDates }
     }
 
     /// 開關打開才顯示日期選擇；已自動帶到下個月的，提醒確認是不是同一天
@@ -1295,11 +1321,17 @@ struct AccountEditor: View {
                 ? resolvedBillDate(statementDate, initial: initialStatementDate, stored: a.statementDate) : nil
             a.dueDate = category.isLiability
                 ? resolvedBillDate(dueDate, initial: initialDueDate, stored: a.dueDate) : nil
+            a.shareBillDates = category.isLiability && shareBillDates != a.sharesBillDates ? shareBillDates : a.shareBillDates
             a.icon = resolvedIcon
             if a.category == .stocks && a.valuation == .balance && usesPortfolio {
                 a.valuation = .portfolio
             }
             store.update(a)
+            // 改了日期：同銀行共用日期的卡一起改
+            if a.category.isLiability && a.sharesBillDates {
+                if dueDate != initialDueDate { store.setBillDate(dueDate, kind: .due, for: a.id) }
+                if statementDate != initialStatementDate { store.setBillDate(statementDate, kind: .statement, for: a.id) }
+            }
         } else {
             var a = draftAccount(icon: resolvedIcon)
             a.name = trimmedName

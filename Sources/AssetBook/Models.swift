@@ -211,6 +211,8 @@ struct Account: Identifiable, Codable, Hashable {
     /// 負債：結帳日、繳費日（或扣款日）。存的是實際日期，過了之後自動帶到下個月同一天、等使用者確認
     var statementDate: BillDate?
     var dueDate: BillDate?
+    /// 和同一間銀行的其他卡共用結帳日、繳費日；nil 表示自動（名稱有「未出帳」的不共用）
+    var shareBillDates: Bool?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
@@ -227,7 +229,7 @@ struct Account: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate
+        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate, shareBillDates
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -244,6 +246,7 @@ struct Account: Identifiable, Codable, Hashable {
         cashGroup = try c.decodeIfPresent(CashGroup.self, forKey: .cashGroup)
         statementDate = try c.decodeIfPresent(BillDate.self, forKey: .statementDate)
         dueDate = try c.decodeIfPresent(BillDate.self, forKey: .dueDate)
+        shareBillDates = try c.decodeIfPresent(Bool.self, forKey: .shareBillDates)
     }
 
     /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
@@ -324,10 +327,13 @@ struct BillDate: Codable, Hashable {
     var date: Date
 }
 
-/// 負債帳戶的一個結帳日或繳費日
+/// 負債帳戶的一個結帳日或繳費日。同一間銀行共用日期的卡合成一筆（accounts 有多個）
 struct BillEvent: Identifiable, Hashable {
     enum Kind: String { case statement, due }
+    /// 代表的帳戶（顯示圖示、確認日期時用）
     let account: Account
+    /// 共用這個日期的所有帳戶
+    var accounts: [Account]
     let kind: Kind
     let date: Date
     /// 從上次設定的日期自動帶到之後的月份（同一天），還沒確認過；遇到假日可能不同
@@ -336,6 +342,17 @@ struct BillEvent: Identifiable, Hashable {
     /// 月曆上的短字
     var shortTitle: String { kind == .due ? "繳" : "結" }
     var title: String { kind == .due ? "繳費" : "結帳" }
+    /// 一張卡用帳戶名稱；同銀行多張卡用銀行名稱
+    var name: String { accounts.count > 1 ? (account.bankName ?? account.name) : account.name }
+    /// 同銀行多張卡時，列出各張卡的名稱（去掉銀行名稱比較短）
+    var memberNames: String? {
+        guard accounts.count > 1 else { return nil }
+        let bank = account.bankName ?? ""
+        return accounts.map { a in
+            let short = a.name.replacingOccurrences(of: bank, with: "").trimmingCharacters(in: .whitespaces)
+            return short.isEmpty ? a.name : short
+        }.joined(separator: "、")
+    }
 }
 
 extension Calendar {
@@ -350,6 +367,19 @@ extension Calendar {
 extension Account {
     func billDate(_ kind: BillEvent.Kind) -> BillDate? { kind == .due ? dueDate : statementDate }
 
+    /// 是否和同銀行的卡共用日期（預設：名稱有「未出帳」的不共用）
+    var sharesBillDates: Bool { shareBillDates ?? !name.contains("未出帳") }
+
+    /// 負債帳戶所屬的銀行（依圖示或名稱比對到的銀行網站）；認不出來就是 nil
+    var bankDomain: String? {
+        guard category.isLiability else { return nil }
+        if case .website(let d) = icon ?? IconCatalog.suggestion(for: self) { return d }
+        return nil
+    }
+
+    /// 銀行的簡稱，例如「玉山」
+    var bankName: String? { bankDomain.flatMap { d in IconCatalog.sites.first { $0.domain == d }?.keywords.first } }
+
     /// from 當天起 within 天內的結帳日、繳費日。設定的日期本身算已確認；
     /// 之後的月份用同一天自動帶入，標成「需要確認」
     func billEvents(from: Date, within days: Int, calendar cal: Calendar = .current) -> [BillEvent] {
@@ -358,10 +388,13 @@ extension Account {
         var out: [BillEvent] = []
         for kind in [BillEvent.Kind.statement, .due] {
             guard let set = billDate(kind) else { continue }
+            func event(_ d: Date, _ needsConfirm: Bool) -> BillEvent {
+                BillEvent(account: self, accounts: [self], kind: kind, date: d, needsConfirm: needsConfirm)
+            }
             let base = cal.startOfDay(for: set.date)
             let day = cal.component(.day, from: base)
             if base >= start && base <= end {
-                out.append(BillEvent(account: self, kind: kind, date: base, needsConfirm: false))
+                out.append(event(base, false))
             }
             var month = base
             for _ in 0..<120 {
@@ -369,7 +402,7 @@ extension Account {
                       let d = cal.date(day: day, inMonthOf: next) else { break }
                 month = next
                 if d > end { break }
-                if d >= start { out.append(BillEvent(account: self, kind: kind, date: d, needsConfirm: true)) }
+                if d >= start { out.append(event(d, true)) }
             }
         }
         return out

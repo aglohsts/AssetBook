@@ -1008,11 +1008,7 @@ private struct UpcomingBillsCard: View {
     @Environment(\.portfolio) private var store
     let record: Snapshot
 
-    private var events: [BillEvent] {
-        store.activeAccounts(in: .liability)
-            .flatMap { $0.billEvents(from: .now, within: 30) }
-            .sorted { $0.date < $1.date }
-    }
+    private var events: [BillEvent] { store.billEvents(from: .now, within: 30) }
 
     @State private var editing: BillEvent?
     @State private var draftDate = Date.now
@@ -1080,7 +1076,10 @@ private struct UpcomingBillsCard: View {
         .popover(item: Binding(get: { editing?.id == e.id ? editing : nil },
                                set: { if $0 == nil { editing = nil } }), arrowEdge: .trailing) { ev in
             VStack(alignment: .leading, spacing: 12) {
-                Text("\(ev.account.name) · \(ev.title)日").font(.headline)
+                Text("\(ev.name) · \(ev.title)日").font(.headline)
+                if let members = ev.memberNames {
+                    Text("同一間銀行一起改：\(members)").font(.caption).foregroundStyle(.secondary)
+                }
                 if ev.needsConfirm {
                     Text("從上個月同一天帶入，遇到假日可能不同，請確認。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -1108,21 +1107,32 @@ private struct UpcomingBillsCard: View {
         let cal = Calendar.current
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
         let urgent = e.kind == .due && days <= 3
-        let amount = record.amounts[e.account.id]
+        // 應繳金額：各張卡換成台幣加總；外幣另外列出原幣金額
+        let owed = e.accounts.compactMap { a in record.amounts[a.id].map { (a, $0) } }.filter { $0.1 != 0 }
+        let totalTWD = owed.reduce(0) { $0 + $1.1 * store.rate($1.0.currency, in: record) }
+        let foreign = owed.filter { $0.0.currency != .twd }
         return HStack(spacing: 12) {
             AccountAvatar(account: e.account, size: 30)
             VStack(alignment: .leading, spacing: 1) {
-                Text(e.account.name).lineLimit(1)
-                // 欄位已經寫了繳費／結帳，這裡改標星期，方便看是不是遇到假日
-                Text(e.date.formatted(.dateTime.weekday(.wide))).font(.caption).foregroundStyle(.secondary)
+                Text(e.name).lineLimit(1)
+                // 欄位已經寫了繳費／結帳，這裡標星期（方便看是不是遇到假日）；同銀行多張卡時列出卡名
+                Text([e.date.formatted(.dateTime.weekday(.wide)), e.memberNames].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if e.kind == .due, let amount, amount != 0 {
-                if amount < 0 {
-                    Text("退款").font(.caption).foregroundStyle(.green)
+            if e.kind == .due, !owed.isEmpty {
+                VStack(alignment: .trailing, spacing: 1) {
+                    HStack(spacing: 4) {
+                        if totalTWD < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
+                        MoneyText(value: abs(totalTWD)).font(.subheadline)
+                    }
+                    if !foreign.isEmpty {
+                        // 原幣金額，例如 ¥15,000（有台幣卡一起時也列出，才看得出怎麼加總）
+                        Text(owed.map { Fmt.money($0.1, $0.0.currency) }.joined(separator: " + "))
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
-                MoneyText(value: abs(amount) * store.rate(e.account.currency, in: record))
-                    .font(.subheadline)
             }
             VStack(alignment: .trailing, spacing: 1) {
                 Text(e.date.formatted(.dateTime.month(.defaultDigits).day()))

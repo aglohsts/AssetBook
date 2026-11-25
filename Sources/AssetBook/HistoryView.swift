@@ -135,8 +135,7 @@ struct HistoryView: View {
         let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
         // 這個月每一天的結帳日、繳費日
         let monthLength = cal.range(of: .day, in: .month, for: month)?.count ?? 31
-        let bills = Dictionary(grouping: store.activeAccounts(in: .liability)
-            .flatMap { $0.billEvents(from: month, within: monthLength - 1) }) { cal.startOfDay(for: $0.date) }
+        let bills = Dictionary(grouping: store.billEvents(from: month, within: monthLength - 1)) { cal.startOfDay(for: $0.date) }
         return LazyVGrid(columns: cols, spacing: 6) {
             ForEach(Array(dayCells.enumerated()), id: \.offset) { _, day in
                 if let day {
@@ -267,7 +266,7 @@ private struct DayCell: View {
                 Spacer(minLength: 0)
                 ForEach(bills.prefix(2)) { b in
                     // 從上個月帶入、還沒確認的日子加「?」
-                    Text("\(b.shortTitle) \(b.account.name)\(b.needsConfirm ? "?" : "")")
+                    Text("\(b.shortTitle) \(b.name)\(b.needsConfirm ? "?" : "")")
                         .font(.system(size: 10))
                         .lineLimit(1)
                         .foregroundStyle(b.kind == .due ? Color.red : Color.secondary)

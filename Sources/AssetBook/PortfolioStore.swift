@@ -364,11 +364,50 @@ final class PortfolioStore {
         update(a)
     }
 
-    /// 確認或修改某一期的結帳日、繳費日（之後的月份會從這天帶入）
-    func setBillDate(_ date: Date, kind: BillEvent.Kind, for accountID: UUID) {
-        guard var a = account(id: accountID) else { return }
-        if kind == .due { a.dueDate = BillDate(date: date) } else { a.statementDate = BillDate(date: date) }
-        update(a)
+    // MARK: 結帳日與繳費日
+
+    /// 和這個帳戶共用結帳日、繳費日的帳戶（同銀行、都選擇共用的使用中負債帳戶，包含自己）
+    func billGroup(for account: Account) -> [Account] {
+        guard account.sharesBillDates, let bank = account.bankDomain else { return [account] }
+        let members = activeAccounts(in: .liability).filter { $0.sharesBillDates && $0.bankDomain == bank }
+        return members.contains { $0.id == account.id } ? members : [account] + members
+    }
+
+    /// 一組帳戶共用的日期：成員中最近設定的那一個（日期最晚的）
+    func groupBillDate(_ kind: BillEvent.Kind, for account: Account) -> BillDate? {
+        billGroup(for: account).compactMap { $0.billDate(kind) }.max { $0.date < $1.date }
+    }
+
+    /// from 起 within 天內的結帳日、繳費日；同銀行共用日期的卡合成一筆
+    func billEvents(from: Date, within days: Int) -> [BillEvent] {
+        var seen = Set<UUID>()
+        var out: [BillEvent] = []
+        for a in activeAccounts(in: .liability) where !seen.contains(a.id) {
+            let group = billGroup(for: a)
+            group.forEach { seen.insert($0.id) }
+            // 用整組的日期算，代表帳戶選有設定日期的那一張
+            var rep = group.first { $0.dueDate != nil || $0.statementDate != nil } ?? a
+            rep.dueDate = groupBillDate(.due, for: a)
+            rep.statementDate = groupBillDate(.statement, for: a)
+            out += rep.billEvents(from: from, within: days).map { e in
+                var e = e
+                e.accounts = group
+                return e
+            }
+        }
+        return out.sorted { $0.date < $1.date }
+    }
+
+    /// 確認或修改某一期的結帳日、繳費日（之後的月份會從這天帶入）；同銀行共用日期的卡一起改
+    func setBillDate(_ date: Date?, kind: BillEvent.Kind, for accountID: UUID) {
+        guard let base = account(id: accountID) else { return }
+        for member in billGroup(for: base) {
+            guard var a = account(id: member.id) else { continue }
+            let value = date.map(BillDate.init)
+            if kind == .due { a.dueDate = value } else { a.statementDate = value }
+            if let i = accounts.firstIndex(where: { $0.id == a.id }) { accounts[i] = a }
+        }
+        persist()
     }
 
     func update(_ account: Account) {
