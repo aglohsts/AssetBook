@@ -269,6 +269,14 @@ private struct NetWorthCard: View {
         return p
     }
 
+    /// 走勢圖 X 軸：一年以上只標年份，兩個月以上標年/月，再短才標月/日
+    static func axisLabel(_ d: Date, spanDays: Double) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        if spanDays > 400 { return "\(c.year!)" }
+        if spanDays > 60 { return "\(c.year!)/\(c.month!)" }
+        return "\(c.month!)/\(c.day!)"
+    }
+
     /// 依區間漲跌決定線的顏色（跟隨紅漲綠跌設定）
     private func trendColor(_ pts: [Point]) -> Color {
         guard let a = pts.first?.value, let b = pts.last?.value, abs(b - a) >= 1 else { return .accentColor }
@@ -342,10 +350,14 @@ private struct NetWorthCard: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.month(.defaultDigits).day())
-                    .font(.caption2)
-                    .foregroundStyle(Color.secondary)
+            // 跨年時刻度會落在 1/1，只顯示月/日會變成好幾個「1/1」：依區間長短換格式
+            let span = (pts.last?.date ?? .now).timeIntervalSince(pts.first?.date ?? .now) / 86_400
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisValueLabel {
+                    if let d = value.as(Date.self) { Text(Self.axisLabel(d, spanDays: span)) }
+                }
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
             }
         }
         .animation(.snappy, value: range)
