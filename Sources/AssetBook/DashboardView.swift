@@ -1014,6 +1014,9 @@ private struct UpcomingBillsCard: View {
             .sorted { $0.date < $1.date }
     }
 
+    @State private var editing: BillEvent?
+    @State private var draftDate = Date.now
+
     var body: some View {
         let events = events
         if !events.isEmpty {
@@ -1021,6 +1024,11 @@ private struct UpcomingBillsCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text("接下來要繳").font(.headline.weight(.medium))
                     Text("30 天內").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if events.contains(where: \.needsConfirm) {
+                        Label("有日期從上個月帶入，請確認", systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 VStack(spacing: 0) {
                     ForEach(Array(events.prefix(8).enumerated()), id: \.element.id) { i, e in
@@ -1032,7 +1040,44 @@ private struct UpcomingBillsCard: View {
         }
     }
 
+    /// 點一列可以確認或改日期（遇到假日不同天）
     private func row(_ e: BillEvent) -> some View {
+        Button {
+            draftDate = e.date
+            editing = e
+        } label: {
+            rowContent(e).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(e.needsConfirm ? "從上個月同一天帶入，點一下確認日期" : "點一下修改日期")
+        .popover(item: Binding(get: { editing?.id == e.id ? editing : nil },
+                               set: { if $0 == nil { editing = nil } }), arrowEdge: .trailing) { ev in
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(ev.account.name) · \(ev.title)日").font(.headline)
+                if ev.needsConfirm {
+                    Text("從上個月同一天帶入，遇到假日可能不同，請確認。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                DatePicker("日期", selection: $draftDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                HStack {
+                    Spacer()
+                    Button("取消") { editing = nil }
+                    Button(ev.needsConfirm && Calendar.current.isDate(draftDate, inSameDayAs: ev.date) ? "確認是這天" : "儲存") {
+                        store.setBillDate(draftDate, kind: ev.kind, for: ev.account.id)
+                        editing = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding()
+            .frame(width: 300)
+        }
+    }
+
+    private func rowContent(_ e: BillEvent) -> some View {
         let cal = Calendar.current
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
         let urgent = e.kind == .due && days <= 3
@@ -1054,9 +1099,13 @@ private struct UpcomingBillsCard: View {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(e.date.formatted(.dateTime.month(.defaultDigits).day()))
                     .font(.subheadline.weight(.medium)).monospacedDigit()
-                Text(days == 0 ? "今天" : days == 1 ? "明天" : "剩 \(days) 天")
-                    .font(.caption).monospacedDigit()
-                    .foregroundStyle(urgent ? Color.red : Color.secondary)
+                if e.needsConfirm {
+                    Text("請確認").font(.caption.weight(.medium)).foregroundStyle(.orange)
+                } else {
+                    Text(days == 0 ? "今天" : days == 1 ? "明天" : "剩 \(days) 天")
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(urgent ? Color.red : Color.secondary)
+                }
             }
             .frame(minWidth: 64, alignment: .trailing)
         }

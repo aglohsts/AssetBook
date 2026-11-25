@@ -967,9 +967,14 @@ struct AccountEditor: View {
     @State private var usesPortfolio: Bool
     /// 現金子分類；nil 為自動判斷
     @State private var cashGroup: CashGroup?
-    /// 負債：每月結帳日、繳費日
-    @State private var statementDay: Int?
-    @State private var dueDay: Int?
+    /// 負債：這期的結帳日、繳費日（打開時已過期的會帶到下個月同一天）
+    @State private var statementDate: Date?
+    @State private var dueDate: Date?
+    /// 打開時的值，用來判斷有沒有改過（沒改就保留原本存的日期）
+    private let initialStatementDate: Date?
+    private let initialDueDate: Date?
+    /// 打開時就已經自動帶到下個月、需要確認的項目
+    private let rolledKinds: Set<BillEvent.Kind>
     @State private var confirmDelete = false
 
     // 圖示
@@ -1029,8 +1034,21 @@ struct AccountEditor: View {
         _currency = State(initialValue: account?.currency ?? .twd)
         _usesPortfolio = State(initialValue: account.map(\.isPortfolio) ?? (category == .stocks))
         _cashGroup = State(initialValue: account?.cashGroup)
-        _statementDay = State(initialValue: account?.statementDay)
-        _dueDay = State(initialValue: account?.dueDay)
+        // 已經過了的日期，預設帶到下一次（同一天），並提醒確認
+        var rolled: Set<BillEvent.Kind> = []
+        func upcoming(_ kind: BillEvent.Kind) -> Date? {
+            guard let account, let set = account.billDate(kind) else { return nil }
+            if Calendar.current.startOfDay(for: set.date) >= Calendar.current.startOfDay(for: .now) { return set.date }
+            let next = account.billEvents(from: .now, within: 62).first { $0.kind == kind }
+            if next != nil { rolled.insert(kind) }
+            return next?.date ?? set.date
+        }
+        let s = upcoming(.statement), d = upcoming(.due)
+        _statementDate = State(initialValue: s)
+        _dueDate = State(initialValue: d)
+        initialStatementDate = s
+        initialDueDate = d
+        rolledKinds = rolled
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1134,12 +1152,12 @@ struct AccountEditor: View {
 
                 if category.isLiability {
                     Section {
-                        dayPicker("每月結帳日", selection: $statementDay)
-                        dayPicker("每月繳費日", selection: $dueDay)
+                        billDateRow("繳費日", kind: .due, date: $dueDate)
+                        billDateRow("結帳日", kind: .statement, date: $statementDate)
                     } header: {
                         Text("結帳與繳費")
                     } footer: {
-                        Text("選填。設定後會顯示在總覽的「接下來要繳」和歷史紀錄的月曆上。貸款可以把扣款日填在繳費日。")
+                        Text("選填，填這一期的日期。過了之後會自動帶到下個月同一天，遇到假日不同再改。會顯示在總覽的「接下來要繳」和月曆上；貸款的扣款日填在繳費日。")
                     }
                 }
 
@@ -1242,11 +1260,26 @@ struct AccountEditor: View {
         #endif
     }
 
-    private func dayPicker(_ title: String, selection: Binding<Int?>) -> some View {
-        Picker(title, selection: selection) {
-            Text("不設定").tag(Int?.none)
-            ForEach(1...31, id: \.self) { d in Text("每月 \(d) 號").tag(Int?.some(d)) }
+    /// 開關打開才顯示日期選擇；已自動帶到下個月的，提醒確認是不是同一天
+    @ViewBuilder private func billDateRow(_ title: String, kind: BillEvent.Kind, date: Binding<Date?>) -> some View {
+        Toggle(title, isOn: Binding(get: { date.wrappedValue != nil },
+                                    set: { date.wrappedValue = $0 ? (date.wrappedValue ?? .now) : nil }))
+        if let value = date.wrappedValue {
+            DatePicker("這期\(title)", selection: Binding(get: { value }, set: { date.wrappedValue = $0 }),
+                       displayedComponents: .date)
+            if rolledKinds.contains(kind), value == (kind == .due ? initialDueDate : initialStatementDate) {
+                Label("已經是下個月了，日期先帶到同一天，請確認是否正確", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
+    }
+
+    /// 沒改過就保留原本存的日期（還沒確認的自動帶入不會因為改了名稱就被當成已確認）
+    private func resolvedBillDate(_ value: Date?, initial: Date?, stored: BillDate?) -> BillDate? {
+        guard let value else { return nil }
+        if value == initial, let stored { return stored }
+        return BillDate(date: value)
     }
 
     private func save() {
@@ -1258,8 +1291,10 @@ struct AccountEditor: View {
             a.note = note
             a.category = category
             a.cashGroup = category == .cash ? cashGroup : nil
-            a.statementDay = category.isLiability ? statementDay : nil
-            a.dueDay = category.isLiability ? dueDay : nil
+            a.statementDate = category.isLiability
+                ? resolvedBillDate(statementDate, initial: initialStatementDate, stored: a.statementDate) : nil
+            a.dueDate = category.isLiability
+                ? resolvedBillDate(dueDate, initial: initialDueDate, stored: a.dueDate) : nil
             a.icon = resolvedIcon
             if a.category == .stocks && a.valuation == .balance && usesPortfolio {
                 a.valuation = .portfolio
@@ -1269,8 +1304,8 @@ struct AccountEditor: View {
             var a = draftAccount(icon: resolvedIcon)
             a.name = trimmedName
             a.cashGroup = category == .cash ? cashGroup : nil
-            a.statementDay = category.isLiability ? statementDay : nil
-            a.dueDay = category.isLiability ? dueDay : nil
+            a.statementDate = category.isLiability ? statementDate.map(BillDate.init) : nil
+            a.dueDate = category.isLiability ? dueDate.map(BillDate.init) : nil
             store.add(a)
             onCreate?(a)
         }

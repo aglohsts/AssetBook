@@ -364,6 +364,13 @@ final class PortfolioStore {
         update(a)
     }
 
+    /// 確認或修改某一期的結帳日、繳費日（之後的月份會從這天帶入）
+    func setBillDate(_ date: Date, kind: BillEvent.Kind, for accountID: UUID) {
+        guard var a = account(id: accountID) else { return }
+        if kind == .due { a.dueDate = BillDate(date: date) } else { a.statementDate = BillDate(date: date) }
+        update(a)
+    }
+
     func update(_ account: Account) {
         guard let i = accounts.firstIndex(where: { $0.id == account.id }) else { return }
         accounts[i] = account

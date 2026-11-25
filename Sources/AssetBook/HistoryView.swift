@@ -266,10 +266,12 @@ private struct DayCell: View {
             if !bills.isEmpty {
                 Spacer(minLength: 0)
                 ForEach(bills.prefix(2)) { b in
-                    Text("\(b.shortTitle) \(b.account.name)")
+                    // 從上個月帶入、還沒確認的日子加「?」
+                    Text("\(b.shortTitle) \(b.account.name)\(b.needsConfirm ? "?" : "")")
                         .font(.system(size: 10))
                         .lineLimit(1)
                         .foregroundStyle(b.kind == .due ? Color.red : Color.secondary)
+                        .opacity(b.needsConfirm ? 0.6 : 1)
                 }
                 if bills.count > 2 {
                     Text("+\(bills.count - 2)").font(.system(size: 10)).foregroundStyle(.secondary)
