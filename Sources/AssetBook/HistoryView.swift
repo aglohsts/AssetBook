@@ -271,11 +271,35 @@ private struct DayCell: View {
 
 struct SnapshotDetailView: View {
     @Environment(\.portfolio) private var store
+    /// 點進來時的那筆紀錄；畫面上顯示的是這一天在 store 裡最新的版本（修改後會馬上更新）
     let snapshot: Snapshot
+    @State private var notTodayAlert = false
+    /// 點了今天紀錄中的某個帳戶：只改這一項
+    @State private var editingAccount: Account?
+
+    /// 同一天的最新紀錄：手動記錄優先，其次自動估值點，都找不到才用點進來時的資料
+    private var current: Snapshot {
+        let cal = Calendar.current
+        return store.snapshots.last { cal.isDate($0.date, inSameDayAs: snapshot.date) }
+            ?? store.autoSnapshots.last { cal.isDate($0.date, inSameDayAs: snapshot.date) }
+            ?? snapshot
+    }
+
+    /// 判斷「今天」用的時間：打開畫面、按下修改、跨過午夜時都會更新
+    @State private var now = Date.now
+    @State private var dayEndedAlert = false
+
+    /// 只能修改今天的紀錄；過了那天就變成唯讀
+    private var isToday: Bool { Calendar.current.isDate(snapshot.date, inSameDayAs: now) }
 
     var body: some View {
+        let snapshot = current
         let prev = store.snapshot(before: snapshot)
         List {
+            Section {
+                editNotice
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
@@ -290,27 +314,24 @@ struct SnapshotDetailView: View {
             }
 
             Section("報價") {
-                ForEach(Quote.allCases) { q in
-                    let v = snapshot.quotes[q] ?? 0
-                    LabeledContent {
-                        HStack(spacing: 8) {
-                            Text(Fmt.number(v)).monospacedDigit()
-                            if let p = prev?.quotes[q], p != 0 {
-                                Text(Fmt.percent((v - p) / p))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(store.deltaColor(v - p))
-                            }
-                        }
-                    } label: {
-                        Label(q.title, systemImage: q.symbol)
-                    }
+                ForEach(Quote.allCases.filter { (snapshot.quotes[$0] ?? 0) != 0 }) { q in
+                    QuoteRow(quote: q, value: snapshot.quotes[q] ?? 0, previous: prev?.quotes[q])
                 }
             }
 
             ForEach(store.activeCategories) { cat in
                 Section {
                     ForEach(store.accounts(in: cat).filter { snapshot.amounts[$0.id] != nil || prev?.amounts[$0.id] != nil }) { a in
-                        AccountRow(account: a, snapshot: snapshot, previous: prev)
+                        if isToday {
+                            Button { edit(a) } label: {
+                                AccountRow(account: a, snapshot: snapshot, previous: prev)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(a.isPortfolio ? "修改持股（打開更新資產）" : "修改這一項")
+                        } else {
+                            AccountRow(account: a, snapshot: snapshot, previous: prev)
+                        }
                     }
                 } header: {
                     HStack {
@@ -322,5 +343,123 @@ struct SnapshotDetailView: View {
             }
         }
         .navigationTitle(snapshot.date.formatted(.dateTime.year().month().day()))
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openUpdateSheet()
+                } label: {
+                    if isToday {
+                        Label("修改", systemImage: "square.and.pencil")
+                    } else {
+                        Label("已鎖定", systemImage: "lock")
+                    }
+                }
+                .disabled(!isToday)
+                .help(isToday ? "修改今天的紀錄（⌘U）" : "過去的紀錄，只能查看")
+            }
+        }
+        .sheet(item: $editingAccount) { a in
+            AmountEditor(account: a, target: current).environment(\.portfolio, store)
+        }
+        .onAppear { now = .now }
+        // 畫面開著跨過午夜：這一頁馬上變成唯讀，正在修改的視窗也關掉，避免存到已經過去的那一天
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            let wasToday = isToday
+            now = .now
+            guard wasToday, !isToday else { return }
+            let editing = editingAccount != nil || (store.isUpdating && store.isUpdatingTodayOnly)
+            editingAccount = nil
+            if store.isUpdatingTodayOnly { store.isUpdating = false }
+            if editing { dayEndedAlert = true }
+        }
+        .alert("這一天已經結束", isPresented: $dayEndedAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("已過午夜，這筆變成過去的紀錄，修改沒有儲存。要記錄今天的數字，請從總覽按「更新資產」。")
+        }
+        .alert("只能修改今天的紀錄", isPresented: $notTodayAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("這筆是 \(snapshot.date.formatted(.dateTime.month().day())) 的紀錄，過去的紀錄不能修改。")
+        }
+    }
+
+    /// 頁面最上方的提示：今天可以修改；過去的紀錄只能查看
+    @ViewBuilder private var editNotice: some View {
+        if isToday {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("今天的紀錄")
+                    Text("點任一項目可以直接修改，過了今天就會鎖定。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "square.and.pencil").foregroundStyle(Color.accentColor)
+            }
+        } else {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("過去的紀錄")
+                    Text("只能查看，不能修改。只有當天的紀錄可以修改。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "lock.fill").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func openUpdateSheet() {
+        now = .now
+        guard isToday else { notTodayAlert = true; return }
+        store.isUpdatingTodayOnly = true
+        store.isUpdating = true
+    }
+
+    /// 點單一項目：一般帳戶只改這一項的金額；持股帳戶要改股數，改用完整的更新畫面
+    private func edit(_ account: Account) {
+        now = .now
+        guard isToday else { notTodayAlert = true; return }
+        if account.isPortfolio { openUpdateSheet() } else { editingAccount = account }
+    }
+}
+
+/// 歷史明細裡的一列報價：灰色圖示、名稱下方標單位，數字依報價取合適的小數位數，
+/// 漲跌欄固定寬度（沒有上一筆就顯示「—」），整欄數字才會對齊
+private struct QuoteRow: View {
+    @Environment(\.portfolio) private var store
+    let quote: Quote
+    let value: Double
+    let previous: Double?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: quote.symbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(quote.title)
+                Text(quote.unit).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Text(quote.displayPrefix + Fmt.number(value, digits: quote.displayDigits...quote.displayDigits))
+                .monospacedDigit()
+            change
+                .font(.caption.monospacedDigit())
+                .frame(width: 64, alignment: .trailing)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private var change: some View {
+        if let previous, previous != 0 {
+            let pct = (value - previous) / previous
+            // 四捨五入後是 0.0% 的用灰色，不要紅綠
+            Text(Fmt.percent(pct))
+                .foregroundStyle(store.deltaColor(abs(pct) < 0.0005 ? 0 : value - previous))
+        } else {
+            Text("—").foregroundStyle(.tertiary)
+        }
     }
 }

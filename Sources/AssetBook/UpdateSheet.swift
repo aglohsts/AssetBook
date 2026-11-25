@@ -7,6 +7,8 @@ struct UpdateSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let base: Snapshot?
+    /// 只能記錄今天（從歷史紀錄修改今天那筆時）：隱藏日期選擇
+    var todayOnly = false
     /// 使用中的帳戶，從 store 即時讀取（在這個畫面新增信用卡會馬上出現）
     private var accounts: [Account] { store.activeAccounts }
 
@@ -36,8 +38,9 @@ struct UpdateSheet: View {
         case account(UUID)
     }
 
-    init(base: Snapshot?, accounts: [Account]) {
+    init(base: Snapshot?, accounts: [Account], todayOnly: Bool = false) {
         self.base = base
+        self.todayOnly = todayOnly
         _quoteDrafts = State(initialValue: Dictionary(uniqueKeysWithValues: Quote.allCases.map { q in
             (q, base?.quotes[q].map { Fmt.number($0) } ?? "")
         }))
@@ -173,7 +176,11 @@ struct UpdateSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    DatePicker("日期", selection: $date, in: ...Date.now, displayedComponents: .date)
+                    if todayOnly {
+                        LabeledContent("日期", value: date.formatted(.dateTime.year().month().day()))
+                    } else {
+                        DatePicker("日期", selection: $date, in: ...Date.now, displayedComponents: .date)
+                    }
                 } footer: {
                     if store.hasSnapshot(on: date) {
                         Label("這天已有一筆紀錄，儲存後會覆蓋。", systemImage: "exclamationmark.triangle.fill")
@@ -252,7 +259,7 @@ struct UpdateSheet: View {
                             Text(cat.title)
                         } footer: {
                             if cat.isLiability {
-                                Text("輸入本期應繳金額，會自動從淨值扣除。沒帳單就按「無帳單」；不再使用的卡可到「帳戶」頁封存。")
+                                Text("輸入本期應繳金額，會自動從淨值扣除；有退款就填負數（例如 -500）。沒帳單就按「無帳單」；不再使用的卡可到「帳戶」頁封存。")
                             }
                         }
                     }

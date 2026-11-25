@@ -99,8 +99,8 @@ struct RootView: View {
         @Bindable var store = store
         navigation
         .background { categoryShortcuts }
-        .sheet(isPresented: $store.isUpdating) {
-            UpdateSheet(base: store.latest, accounts: store.activeAccounts)
+        .sheet(isPresented: $store.isUpdating, onDismiss: { store.isUpdatingTodayOnly = false }) {
+            UpdateSheet(base: store.latest, accounts: store.activeAccounts, todayOnly: store.isUpdatingTodayOnly)
                 .environment(\.portfolio, store)
         }
         .sheet(isPresented: $store.isAddingAccount) {

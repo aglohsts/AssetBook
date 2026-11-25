@@ -323,7 +323,7 @@ private struct CategorySummaryRow: View {
             if let previous {
                 let old = store.total(category, in: previous)
                 if category.isLiability {
-                    LiabilityChange(now: abs(total), before: abs(old))
+                    LiabilityChange(now: -total, before: -old)
                 } else {
                     DeltaText(delta: total - old, base: old, showPercentOnly: true)
                 }
@@ -334,7 +334,7 @@ private struct CategorySummaryRow: View {
             HStack(spacing: 0) {
                 title
                 Spacer(minLength: 8)
-                MoneyText(value: abs(total)).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
+                MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
                 share.font(.callout).monospacedDigit().frame(width: 64, alignment: .trailing)
                 change.font(.callout).monospacedDigit().frame(width: 110, alignment: .trailing)
                 Image(systemName: "chevron.right")
@@ -346,7 +346,7 @@ private struct CategorySummaryRow: View {
                 title
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
-                    MoneyText(value: abs(total)).font(.system(size: 17))
+                    MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17))
                     HStack(spacing: 8) {
                         if !category.isLiability, gross > 0 { share }
                         change
@@ -378,13 +378,13 @@ private struct CategoryOverview: View {
             Label(category.isLiability ? "本期應繳合計" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
-            MoneyText(value: abs(total))
+            MoneyText(value: category.isLiability ? -total : total)
                 .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
                     let old = store.total(category, in: previous)
                     if category.isLiability {
-                        LiabilityChange(now: abs(total), before: abs(old))
+                        LiabilityChange(now: -total, before: -old)
                         Text("較 \(previous.date.formatted(.dateTime.month(.defaultDigits).day()))").foregroundStyle(.secondary)
                     } else {
                         DeltaBadge(delta: total - old, base: old)
@@ -601,11 +601,19 @@ struct AccountRow: View {
                 if account.category.isLiability && !hasAmount {
                     Text("本期無帳單").foregroundStyle(.secondary)
                 } else {
-                    // 負債顯示為正的應繳金額，比較直覺
+                    // 負債顯示為正的應繳金額，比較直覺；負數代表有退款（溢繳），標成「退款」
                     if nested {
                         MoneyText(value: value).font(.subheadline).foregroundStyle(.secondary)
+                    } else if account.category.isLiability && value > 0 {
+                        HStack(spacing: 6) {
+                            Text("退款").font(.caption.weight(.medium))
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.green.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.green)
+                            MoneyText(value: value).fontWeight(.medium)
+                        }
                     } else {
-                        MoneyText(value: account.category.isLiability ? abs(value) : value)
+                        MoneyText(value: account.category.isLiability ? -value : value)
                             .fontWeight(.medium)
                     }
                 }
@@ -646,9 +654,12 @@ struct AccountRow: View {
             } else if abs(old) < 1 {
                 Text("新增").foregroundStyle(.secondary)
             } else if account.category.isLiability {
-                // 帳單變多不是「漲」，用中性色顯示應繳金額的變化
-                let owed = abs(now), owedBefore = abs(old)
-                Text("\(owed > owedBefore ? "▲" : "▼") \(abs((owed - owedBefore) / owedBefore).formatted(.percent.precision(.fractionLength(1))))")
+                // 帳單變多不是「漲」，用中性色顯示應繳金額的變化。
+                // 有退款（負數）時百分比沒意義，改顯示差額
+                let owed = -now, owedBefore = -old
+                Text("\(owed > owedBefore ? "▲" : "▼") " + (owed > 0 && owedBefore > 0
+                     ? abs((owed - owedBefore) / owedBefore).formatted(.percent.precision(.fractionLength(1)))
+                     : Fmt.money(abs(owed - owedBefore), .twd)))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             } else {
@@ -796,7 +807,7 @@ struct AccountDetailView: View {
                     if account.isPortfolio { return "持股明細（股數 × 即時股價）" }
                     return account.category.isLiability ? "輸入應繳金額" : "直接輸入餘額"
                 }())
-                if !account.note.isEmpty { LabeledContent("備註", value: account.note) }
+                NoteField(account: account)
             }
         }
         .navigationTitle(account.name)
@@ -817,14 +828,54 @@ struct AccountDetailView: View {
     }
 }
 
+// MARK: - 備註
+
+/// 帳戶頁的備註：直接點一下就能改，按 Return、點別處或離開頁面時自動儲存。
+/// 沒有備註時也顯示，方便之後再補上
+private struct NoteField: View {
+    @Environment(\.portfolio) private var store
+    let account: Account
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        LabeledContent("備註") {
+            TextField("備註", text: $draft, prompt: Text("新增備註"), axis: .vertical)
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .lineLimit(1...4)
+                .focused($focused)
+                .onSubmit(commit)
+        }
+        .onAppear { draft = account.note }
+        // 在別的地方（例如「編輯」視窗）改了備註，這裡跟著更新
+        .onChange(of: account.note) { _, new in if !focused { draft = new } }
+        .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+        .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var a = store.account(id: account.id), a.note != trimmed else { return }
+        a.note = trimmed
+        store.update(a)
+    }
+}
+
 // MARK: - 修改最新一筆紀錄中的金額
 
-/// 直接修改某帳戶在最新紀錄中的金額（帳單、餘額或持有數量），不必走完整的更新流程
+/// 直接修改某帳戶在某一筆紀錄中的金額（帳單、餘額或持有數量），不必走完整的更新流程。
+/// 沒指定紀錄時改最新一筆（帳戶頁）；歷史紀錄裡改今天那筆時會傳入那一天的紀錄
 struct AmountEditor: View {
     @Environment(\.portfolio) private var store
     @Environment(\.dismiss) private var dismiss
     let account: Account
+    var target: Snapshot? = nil
     @State private var text = ""
+    /// 帳戶備註：跟金額一起改，按「儲存」時一起存
+    @State private var note = ""
+
+    private var record: Snapshot? { target ?? store.latest }
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -842,11 +893,21 @@ struct AmountEditor: View {
                         Text(account.inputUnit).foregroundStyle(.secondary)
                     }
                 } header: {
-                    if let d = store.latest?.date {
+                    if let d = record?.date {
                         Text("\(d.formatted(.dateTime.year().month().day())) 的紀錄")
                     }
                 } footer: {
-                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。" : "會更新最新一筆紀錄中這個帳戶的數字。")
+                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；有退款（溢繳）就填負數，例如 -500；沒有帳單就填 0。"
+                         : target == nil ? "會更新最新一筆紀錄中這個帳戶的數字。" : "會更新這一天紀錄中這個帳戶的數字。")
+                }
+
+                Section {
+                    TextField("備註", text: $note, prompt: Text("選填"), axis: .vertical)
+                        .lineLimit(1...4)
+                } header: {
+                    Text("備註")
+                } footer: {
+                    Text("帳戶的備註，所有紀錄共用。")
                 }
             }
             .formStyle(.grouped)
@@ -861,21 +922,27 @@ struct AmountEditor: View {
                 }
             }
             .onAppear {
-                if let v = store.latest?.amounts[account.id] {
+                note = store.account(id: account.id)?.note ?? account.note
+                if let v = record?.amounts[account.id] {
                     text = Fmt.number(v, digits: account.inputFractionDigits).replacingOccurrences(of: ",", with: "")
                 }
                 focused = true
             }
         }
         #if os(macOS)
-        .frame(width: 380, height: 260)
+        .frame(width: 380, height: 360)
         #endif
     }
 
     private func save() {
-        guard var s = store.latest, let v = Fmt.parse(text) else { return }
+        guard var s = record, let v = Fmt.parse(text) else { return }
         s.amounts[account.id] = v
         store.save(s)
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if var a = store.account(id: account.id), a.note != trimmed {
+            a.note = trimmed
+            store.update(a)
+        }
         dismiss()
     }
 }
@@ -1105,7 +1172,7 @@ struct AccountEditor: View {
                     } else if !isNew {
                         Text("幣別與計價方式建立後無法更改，以免影響過去的紀錄。")
                     } else if category.isLiability {
-                        Text("每次更新時輸入本期應繳金額，計算淨值時會自動扣除。沒有帳單的那期留空即可。")
+                        Text("每次更新時輸入本期應繳金額，計算淨值時會自動扣除；有退款就填負數。沒有帳單的那期留空即可。")
                     } else if holding != nil {
                         Text("每次更新時輸入持有數量，App 會自動乘上當時的價格。")
                     } else {
