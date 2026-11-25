@@ -353,6 +353,33 @@ enum LiabilityType: String, Codable, CaseIterable, Identifiable {
     var symbol: String { self == .card ? "creditcard" : "building.columns" }
 }
 
+/// 負債分頁的分組：卡費（本期應繳）、未出帳、貸款
+enum LiabilityGroup: String, CaseIterable, Identifiable {
+    case bill, unbilled, loan
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .bill: "卡費"
+        case .unbilled: "未出帳"
+        case .loan: "貸款"
+        }
+    }
+    var subtitle: String {
+        switch self {
+        case .bill: "本期應繳"
+        case .unbilled: "還沒出帳單的消費"
+        case .loan: "剩餘本金"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .bill: "creditcard"
+        case .unbilled: "doc.text.magnifyingglass"
+        case .loan: "building.columns"
+        }
+    }
+}
+
 /// 使用者設定的一個實際日期（例如這期 12/3 繳費）。遇到假日可能提早或延後，所以存日期而不是「每月幾號」
 struct BillDate: Codable, Hashable {
     var date: Date
@@ -442,6 +469,12 @@ extension Account {
     /// 負債種類：自己選的優先，否則名稱有「貸」的是貸款
     var resolvedLiabilityType: LiabilityType { liabilityType ?? (name.contains("貸") ? .loan : .card) }
     var isLoan: Bool { category.isLiability && resolvedLiabilityType == .loan }
+
+    /// 負債分頁的分組：貸款、信用卡未出帳（名稱有「未出帳」）、信用卡卡費
+    var liabilityGroup: LiabilityGroup {
+        if isLoan { return .loan }
+        return name.contains("未出帳") ? .unbilled : .bill
+    }
 
     /// 是否和同銀行的卡共用日期（預設：名稱有「未出帳」的不共用；貸款不共用）
     var sharesBillDates: Bool { !isLoan && (shareBillDates ?? !name.contains("未出帳")) }

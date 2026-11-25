@@ -151,12 +151,12 @@ struct AccountsView: View {
         }
 
         if cat.isLiability, !items.isEmpty {
-            // 負債分成信用卡、貸款；信用卡依銀行排在一起
+            // 負債分成卡費、未出帳、貸款；同一組裡依銀行排在一起
             Section {
-                ForEach(LiabilityType.allCases.filter { t in items.contains { $0.resolvedLiabilityType == t } }) { t in
-                    let group = items.filter { $0.resolvedLiabilityType == t }
+                ForEach(LiabilityGroup.allCases.filter { g in items.contains { $0.liabilityGroup == g } }) { g in
+                    let group = items.filter { $0.liabilityGroup == g }
                         .sorted { ($0.bankName ?? $0.name, $0.name) < ($1.bankName ?? $1.name, $1.name) }
-                    LiabilityGroupRow(type: t, accounts: group, snapshot: latest, previous: prev)
+                    LiabilityGroupRow(group: g, accounts: group, snapshot: latest, previous: prev)
                     accountRows(group, latest: latest, prev: prev, indent: 48)
                 }
                 Button {
@@ -465,10 +465,10 @@ private struct CashGroupRow: View {
     }
 }
 
-/// 負債分頁裡的子分類列（信用卡、貸款）：顯示應繳／剩餘合計，底下縮排列出帳戶
+/// 負債分頁裡的子分類列（卡費、未出帳、貸款）：顯示合計，底下縮排列出帳戶
 private struct LiabilityGroupRow: View {
     @Environment(\.portfolio) private var store
-    let type: LiabilityType
+    let group: LiabilityGroup
     let accounts: [Account]
     let snapshot: Snapshot
     let previous: Snapshot?
@@ -478,14 +478,14 @@ private struct LiabilityGroupRow: View {
         let owed = -accounts.reduce(0) { $0 + store.value(of: $1, in: snapshot) }
         let old = previous.map { p in -accounts.reduce(0) { $0 + store.value(of: $1, in: p) } }
         HStack(spacing: 12) {
-            Image(systemName: type.symbol)
+            Image(systemName: group.symbol)
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 36, height: 36)
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
-                Text(type.title).font(.body.weight(.medium))
-                Text(type == .card ? "\(accounts.count) 個帳戶 · 本期應繳" : "\(accounts.count) 筆 · 剩餘本金")
+                Text(group.title).font(.body.weight(.medium))
+                Text("\(accounts.count) 個帳戶 · \(group.subtitle)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
