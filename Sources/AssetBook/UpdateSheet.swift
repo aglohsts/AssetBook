@@ -259,7 +259,7 @@ struct UpdateSheet: View {
                             Text(cat.title)
                         } footer: {
                             if cat.isLiability {
-                                Text("輸入本期應繳金額，會自動從淨值扣除。沒帳單就按「無帳單」；不再使用的卡可到「帳戶」頁封存。")
+                                Text("輸入本期應繳金額，會自動從淨值扣除；有退款就填負數（例如 -500）。沒帳單就按「無帳單」；不再使用的卡可到「帳戶」頁封存。")
                             }
                         }
                     }

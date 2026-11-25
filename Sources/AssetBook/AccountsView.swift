@@ -323,7 +323,7 @@ private struct CategorySummaryRow: View {
             if let previous {
                 let old = store.total(category, in: previous)
                 if category.isLiability {
-                    LiabilityChange(now: abs(total), before: abs(old))
+                    LiabilityChange(now: -total, before: -old)
                 } else {
                     DeltaText(delta: total - old, base: old, showPercentOnly: true)
                 }
@@ -334,7 +334,7 @@ private struct CategorySummaryRow: View {
             HStack(spacing: 0) {
                 title
                 Spacer(minLength: 8)
-                MoneyText(value: abs(total)).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
+                MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
                 share.font(.callout).monospacedDigit().frame(width: 64, alignment: .trailing)
                 change.font(.callout).monospacedDigit().frame(width: 110, alignment: .trailing)
                 Image(systemName: "chevron.right")
@@ -346,7 +346,7 @@ private struct CategorySummaryRow: View {
                 title
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
-                    MoneyText(value: abs(total)).font(.system(size: 17))
+                    MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17))
                     HStack(spacing: 8) {
                         if !category.isLiability, gross > 0 { share }
                         change
@@ -378,13 +378,13 @@ private struct CategoryOverview: View {
             Label(category.isLiability ? "本期應繳合計" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
-            MoneyText(value: abs(total))
+            MoneyText(value: category.isLiability ? -total : total)
                 .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
                     let old = store.total(category, in: previous)
                     if category.isLiability {
-                        LiabilityChange(now: abs(total), before: abs(old))
+                        LiabilityChange(now: -total, before: -old)
                         Text("較 \(previous.date.formatted(.dateTime.month(.defaultDigits).day()))").foregroundStyle(.secondary)
                     } else {
                         DeltaBadge(delta: total - old, base: old)
@@ -601,11 +601,19 @@ struct AccountRow: View {
                 if account.category.isLiability && !hasAmount {
                     Text("本期無帳單").foregroundStyle(.secondary)
                 } else {
-                    // 負債顯示為正的應繳金額，比較直覺
+                    // 負債顯示為正的應繳金額，比較直覺；負數代表有退款（溢繳），標成「退款」
                     if nested {
                         MoneyText(value: value).font(.subheadline).foregroundStyle(.secondary)
+                    } else if account.category.isLiability && value > 0 {
+                        HStack(spacing: 6) {
+                            Text("退款").font(.caption.weight(.medium))
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.green.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.green)
+                            MoneyText(value: value).fontWeight(.medium)
+                        }
                     } else {
-                        MoneyText(value: account.category.isLiability ? abs(value) : value)
+                        MoneyText(value: account.category.isLiability ? -value : value)
                             .fontWeight(.medium)
                     }
                 }
@@ -646,9 +654,12 @@ struct AccountRow: View {
             } else if abs(old) < 1 {
                 Text("新增").foregroundStyle(.secondary)
             } else if account.category.isLiability {
-                // 帳單變多不是「漲」，用中性色顯示應繳金額的變化
-                let owed = abs(now), owedBefore = abs(old)
-                Text("\(owed > owedBefore ? "▲" : "▼") \(abs((owed - owedBefore) / owedBefore).formatted(.percent.precision(.fractionLength(1))))")
+                // 帳單變多不是「漲」，用中性色顯示應繳金額的變化。
+                // 有退款（負數）時百分比沒意義，改顯示差額
+                let owed = -now, owedBefore = -old
+                Text("\(owed > owedBefore ? "▲" : "▼") " + (owed > 0 && owedBefore > 0
+                     ? abs((owed - owedBefore) / owedBefore).formatted(.percent.precision(.fractionLength(1)))
+                     : Fmt.money(abs(owed - owedBefore), .twd)))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             } else {
@@ -886,7 +897,7 @@ struct AmountEditor: View {
                         Text("\(d.formatted(.dateTime.year().month().day())) 的紀錄")
                     }
                 } footer: {
-                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。"
+                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；有退款（溢繳）就填負數，例如 -500；沒有帳單就填 0。"
                          : target == nil ? "會更新最新一筆紀錄中這個帳戶的數字。" : "會更新這一天紀錄中這個帳戶的數字。")
                 }
 
@@ -1161,7 +1172,7 @@ struct AccountEditor: View {
                     } else if !isNew {
                         Text("幣別與計價方式建立後無法更改，以免影響過去的紀錄。")
                     } else if category.isLiability {
-                        Text("每次更新時輸入本期應繳金額，計算淨值時會自動扣除。沒有帳單的那期留空即可。")
+                        Text("每次更新時輸入本期應繳金額，計算淨值時會自動扣除；有退款就填負數。沒有帳單的那期留空即可。")
                     } else if holding != nil {
                         Text("每次更新時輸入持有數量，App 會自動乘上當時的價格。")
                     } else {
