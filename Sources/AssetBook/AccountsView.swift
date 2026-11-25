@@ -796,7 +796,7 @@ struct AccountDetailView: View {
                     if account.isPortfolio { return "持股明細（股數 × 即時股價）" }
                     return account.category.isLiability ? "輸入應繳金額" : "直接輸入餘額"
                 }())
-                if !account.note.isEmpty { LabeledContent("備註", value: account.note) }
+                NoteField(account: account)
             }
         }
         .navigationTitle(account.name)
@@ -814,6 +814,40 @@ struct AccountDetailView: View {
         .onChange(of: store.account(id: account.id) == nil) { _, deleted in
             if deleted { dismiss() }
         }
+    }
+}
+
+// MARK: - 備註
+
+/// 帳戶頁的備註：直接點一下就能改，按 Return、點別處或離開頁面時自動儲存。
+/// 沒有備註時也顯示，方便之後再補上
+private struct NoteField: View {
+    @Environment(\.portfolio) private var store
+    let account: Account
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        LabeledContent("備註") {
+            TextField("備註", text: $draft, prompt: Text("新增備註"), axis: .vertical)
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .lineLimit(1...4)
+                .focused($focused)
+                .onSubmit(commit)
+        }
+        .onAppear { draft = account.note }
+        // 在別的地方（例如「編輯」視窗）改了備註，這裡跟著更新
+        .onChange(of: account.note) { _, new in if !focused { draft = new } }
+        .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+        .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var a = store.account(id: account.id), a.note != trimmed else { return }
+        a.note = trimmed
+        store.update(a)
     }
 }
 
