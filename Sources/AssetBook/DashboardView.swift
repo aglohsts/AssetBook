@@ -584,7 +584,8 @@ private struct CompositionCard: View {
         return DonutChart(slices: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
                           selected: $selected, progress: appeared ? 1 : 0,
                           inset: debt > 0 && (cash?.value ?? 0) > 0
-                            ? .init(sliceID: debtSourceID, fraction: debt / cash!.value, color: Self.debtGray)
+                            ? .init(id: AssetCategory.liability.rawValue, sliceID: debtSourceID,
+                                    fraction: debt / cash!.value, color: Self.debtColor)
                             : nil)
             .overlay {
                 VStack(spacing: 3) {
@@ -628,8 +629,61 @@ private struct CompositionCard: View {
         return VStack(spacing: 4) {
             ForEach(parts) { p in
                 legendRow(p, share: max(p.value, 0) / total)
+                if p.deducted > 0, let debtPart { debtRow(debtPart, cash: p.gross) }
             }
         }
+    }
+
+    /// 現金下面的一列：負債用紅色標出來，佔現金多少（對應圓環裡現金那塊中間的紅線）
+    private func debtRow(_ d: Part, cash: Double) -> some View {
+        let share = cash > 0 ? d.value / cash : 0
+        let isSelected = selected == d.id
+        return VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Text("−").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                Circle().fill(Self.debtColor).frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("負債").font(.subheadline.weight(.medium))
+                    Text("\(d.count) 個帳戶 · 從現金與存款扣除").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    MoneyText(value: -d.value).font(.subheadline.weight(.medium))
+                    HStack(spacing: 8) {
+                        if let old = d.previous {
+                            // 以對淨資產的影響上色：負債變少是好事
+                            DeltaText(delta: old - d.value, base: old, showPercentOnly: true)
+                        }
+                        Text("佔現金 " + share.formatted(.percent.precision(.fractionLength(0))))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption).monospacedDigit()
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    Capsule().fill(Self.debtColor)
+                        .frame(width: max(geo.size.width * min(share, 1) * (appeared ? 1 : 0), appeared ? 4 : 0))
+                }
+            }
+            .frame(height: 3)
+            .padding(.leading, 38)
+        }
+        .padding(.leading, 28)
+        .padding(.trailing, 12)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(isSelected ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opacity(selected == nil || isSelected || selected == debtSourceID ? 1 : 0.45)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.2)) { selected = inside ? d.id : (selected == d.id ? nil : selected) }
+        }
+        .onTapGesture { tab = .accounts(AccountsFilter(.liability)) }
+        .help("查看負債的帳戶")
     }
 
     /// 把負債從現金（幣別分組時是台幣）那一項扣掉；上一筆的數字也一樣扣，漲跌才對得上
@@ -654,7 +708,8 @@ private struct CompositionCard: View {
     /// 負債是現金要還掉的部分：在「現金與存款」（幣別分組時是台幣）那一塊裡面畫一條更細的灰線，
     /// 長度是負債佔現金的比例。現金本身完整呈現
     private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
-    static let debtGray = Color.primary.opacity(0.28)
+    /// 負債的顏色：跟 App 其他地方的負債一樣用紅色，不透明，才不會跟現金的綠色混在一起
+    static let debtColor = AssetCategory.liability.tint
 
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
@@ -742,6 +797,8 @@ private struct DonutChart: View {
 
     /// 畫在某一段裡面、更細的一條線（例如現金裡要還掉的負債）：從那一段的尾端往前，佔那一段的 fraction
     struct Inset {
+        /// 這條線自己的 id（滑到圖例「負債」那一列時亮起）
+        let id: String
         let sliceID: String
         let fraction: Double
         let color: Color
@@ -831,7 +888,7 @@ private struct DonutChart: View {
             .stroke(inset.color, style: StrokeStyle(lineWidth: width, lineCap: .round))
             .frame(width: radius * 2, height: radius * 2)
             .rotationEffect(.degrees(-90))
-            .opacity(selected == nil || selected == arc.id ? 1 : 0.28)
+            .opacity(selected == nil || selected == arc.id || selected == inset.id ? 1 : 0.28)
             .allowsHitTesting(false)
     }
 
