@@ -221,8 +221,11 @@ struct Account: Identifiable, Codable, Hashable {
     var loanStartDate: Date?
     /// 信用卡：從銀行帳戶自動扣款（每期都不用處理）
     var autoDebit: Bool?
-    /// 信用卡：已設定預約轉帳（預扣款）的那一期繳費日；過了那期就要重新設定
+    /// 信用卡：已設定預約轉帳（外幣卡是已換匯）的那一期繳費日；過了那期就要重新設定
     var paymentScheduledFor: Date?
+    /// 貸款：預約轉帳已經一路設定到哪一天、轉入哪個帳戶
+    var paymentScheduledUntil: Date?
+    var paymentAccountID: UUID?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
@@ -240,7 +243,8 @@ struct Account: Identifiable, Codable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate, shareBillDates,
-             liabilityType, loanPaymentDay, loanMonthlyPayment, loanStartDate, autoDebit, paymentScheduledFor
+             liabilityType, loanPaymentDay, loanMonthlyPayment, loanStartDate, autoDebit, paymentScheduledFor,
+             paymentScheduledUntil, paymentAccountID
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -264,6 +268,8 @@ struct Account: Identifiable, Codable, Hashable {
         loanStartDate = try c.decodeIfPresent(Date.self, forKey: .loanStartDate)
         autoDebit = try c.decodeIfPresent(Bool.self, forKey: .autoDebit)
         paymentScheduledFor = try c.decodeIfPresent(Date.self, forKey: .paymentScheduledFor)
+        paymentScheduledUntil = try c.decodeIfPresent(Date.self, forKey: .paymentScheduledUntil)
+        paymentAccountID = try c.decodeIfPresent(UUID.self, forKey: .paymentAccountID)
     }
 
     /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
@@ -351,16 +357,43 @@ struct BillDate: Codable, Hashable {
     var date: Date
 }
 
-/// 信用卡某一期繳費的狀態
-enum PaymentStatus {
+/// 繳費前要處理的一件事：台幣是設定預約轉帳，外幣是換匯（例如日幣卡要先換日幣）
+struct PaymentTask: Hashable, Identifiable {
+    let currency: Currency
+    let done: Bool
+    /// 貸款：預約轉帳設定到哪一天、轉入哪個帳戶
+    var scheduledUntil: Date? = nil
+    var transferTo: String? = nil
+    var id: Currency { currency }
+    var doneTitle: String { currency == .twd ? "已設定預約轉帳" : "已換匯\(currency.casualName)" }
+    var pendingTitle: String { currency == .twd ? "尚未設定預約轉帳" : "尚未換匯\(currency.casualName)" }
+}
+
+/// 某一期繳費的狀態
+enum PaymentStatus: Equatable {
     /// 自動扣款，不用處理
     case autoDebit
-    /// 這期已設定預約轉帳
-    case scheduled
-    /// 還沒設定，要在繳費日前處理
-    case pending
-    /// 本期沒有要繳的金額（0、留空或退款），不用設定
+    /// 本期沒有要繳的金額（0、留空或退款），不用處理
     case nothingDue
+    /// 要處理的事（每個幣別一件），各自完成或還沒
+    case tasks([PaymentTask])
+
+    var pendingCount: Int {
+        if case .tasks(let t) = self { return t.filter { !$0.done }.count }
+        return 0
+    }
+}
+
+extension Currency {
+    /// 口語的幣別名稱，例如「日幣」
+    var casualName: String {
+        switch self {
+        case .twd: "台幣"
+        case .usd: "美金"
+        case .jpy: "日幣"
+        case .gbp: "英鎊"
+        }
+    }
 }
 
 /// 負債帳戶的一個結帳日或繳費日。同一間銀行共用日期的卡合成一筆（accounts 有多個）

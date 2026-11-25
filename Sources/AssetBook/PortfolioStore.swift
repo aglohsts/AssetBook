@@ -404,20 +404,32 @@ final class PortfolioStore {
         return out.sorted { $0.date < $1.date }
     }
 
-    /// 信用卡這一期的繳費狀態（同銀行共用日期的卡，任一張設定了就算整組）
+    /// 這一期繳費前要處理的事。信用卡：每個有要繳金額的幣別一件（台幣＝預約轉帳、外幣＝換匯），
+    /// 同銀行共用日期的卡一起算；貸款：預約轉帳有沒有設定到這一期
     func paymentStatus(for event: BillEvent) -> PaymentStatus? {
-        guard event.kind == .due, !event.account.isLoan else { return nil }
+        guard event.kind == .due else { return nil }
+        let cal = Calendar.current
         let group = event.accounts
         if group.contains(where: { $0.autoDebit == true }) { return .autoDebit }
-        // 最近一筆紀錄裡，這組卡都沒有要繳的錢（0、留空或退款）：不用設定預扣款
-        if !group.contains(where: { (latest?.amounts[$0.id] ?? 0) > 0 }) { return .nothingDue }
-        let cal = Calendar.current
-        // 預扣款設定的那一期：日期之後若有微調（假日），前後 10 天內都算同一期
-        let scheduled = group.contains { a in
+        if event.account.isLoan {
+            let a = event.account
+            let until = a.paymentScheduledUntil
+            let done = until.map { cal.startOfDay(for: $0) >= event.date } ?? false
+            return .tasks([PaymentTask(currency: a.currency, done: done, scheduledUntil: until,
+                                       transferTo: a.paymentAccountID.flatMap { account(id: $0)?.name })])
+        }
+        // 最近一筆紀錄裡有要繳的卡（0、留空或退款的不用處理）
+        let owing = group.filter { (latest?.amounts[$0.id] ?? 0) > 0 }
+        if owing.isEmpty { return .nothingDue }
+        // 設定的那一期：日期之後若有微調（假日），前後 10 天內都算同一期
+        func doneThisPeriod(_ a: Account) -> Bool {
             guard let d = a.paymentScheduledFor else { return false }
             return abs(cal.dateComponents([.day], from: cal.startOfDay(for: d), to: event.date).day ?? 99) <= 10
         }
-        return scheduled ? .scheduled : .pending
+        let currencies = Currency.allCases.filter { c in owing.contains { $0.currency == c } }
+        return .tasks(currencies.map { c in
+            PaymentTask(currency: c, done: owing.filter { $0.currency == c }.allSatisfy(doneThisPeriod))
+        })
     }
 
     /// 設定自動扣款；同銀行共用日期的卡一起改（同一個扣款帳戶）
@@ -430,9 +442,9 @@ final class PortfolioStore {
         persist()
     }
 
-    /// 勾選或取消「這期已設定預扣款」；同銀行共用日期的卡一起改
-    func setPaymentScheduled(_ on: Bool, for event: BillEvent) {
-        for member in event.accounts {
+    /// 勾選或取消這期的「已設定預約轉帳」（外幣是「已換匯」）；只改那個幣別的卡
+    func setPaymentDone(_ on: Bool, currency: Currency, for event: BillEvent) {
+        for member in event.accounts where member.currency == currency {
             guard let i = accounts.firstIndex(where: { $0.id == member.id }) else { continue }
             accounts[i].paymentScheduledFor = on ? event.date : nil
         }

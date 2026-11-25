@@ -985,6 +985,10 @@ struct AccountEditor: View {
     @State private var loanStart: Date
     /// 信用卡：自動扣款
     @State private var autoDebit: Bool
+    /// 貸款：預約轉帳設定到哪天、轉入哪個帳戶
+    @State private var loanScheduled: Bool
+    @State private var loanScheduledUntil: Date
+    @State private var loanTransferAccount: UUID?
     @State private var confirmDelete = false
 
     // 圖示
@@ -1051,6 +1055,9 @@ struct AccountEditor: View {
         _loanHasStart = State(initialValue: account?.loanStartDate != nil)
         _loanStart = State(initialValue: account?.loanStartDate ?? .now)
         _autoDebit = State(initialValue: account?.autoDebit ?? false)
+        _loanScheduled = State(initialValue: account?.paymentScheduledUntil != nil)
+        _loanScheduledUntil = State(initialValue: account?.paymentScheduledUntil ?? .now)
+        _loanTransferAccount = State(initialValue: account?.paymentAccountID)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1183,10 +1190,21 @@ struct AccountEditor: View {
                         if loanHasStart {
                             DatePicker("開始繳費日期", selection: $loanStart, displayedComponents: .date)
                         }
+                        Toggle("自動扣款", isOn: $autoDebit)
+                        if !autoDebit {
+                            Toggle("已設定預約轉帳", isOn: $loanScheduled)
+                            if loanScheduled {
+                                DatePicker("設定到", selection: $loanScheduledUntil, displayedComponents: .date)
+                                Picker("轉入帳戶", selection: $loanTransferAccount) {
+                                    Text("不指定").tag(UUID?.none)
+                                    ForEach(store.activeAccounts(in: .cash)) { a in Text(a.name).tag(UUID?.some(a.id)) }
+                                }
+                            }
+                        }
                     } header: {
                         Text("還款")
                     } footer: {
-                        Text("會顯示在總覽的「繳費與結帳」和月曆上。還在寬限期的話，打開「目前還不需繳費」並填開始繳費的日期，在那之前不會列為要繳。")
+                        Text("會顯示在總覽的「繳費與結帳」和月曆上。還在寬限期的話，打開「目前還不需繳費」並填開始繳費的日期。預約轉帳設定到的日期之後，總覽會提醒你再設定。")
                     }
                 }
 
@@ -1369,6 +1387,9 @@ struct AccountEditor: View {
             a.loanPaymentDay = loanDay
             a.loanMonthlyPayment = Fmt.parse(loanPaymentText)
             a.loanStartDate = loanHasStart ? Calendar.current.startOfDay(for: loanStart) : nil
+            a.autoDebit = autoDebit ? true : nil
+            a.paymentScheduledUntil = !autoDebit && loanScheduled ? Calendar.current.startOfDay(for: loanScheduledUntil) : nil
+            a.paymentAccountID = !autoDebit && loanScheduled ? loanTransferAccount : nil
             a.statementDate = nil
             a.dueDate = nil
         }

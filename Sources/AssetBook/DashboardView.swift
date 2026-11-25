@@ -1062,9 +1062,9 @@ private struct UpcomingBillsCard: View {
                     Text("繳費與結帳").font(.headline.weight(.medium))
                     Text("30 天內").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    let pending = events.filter { store.paymentStatus(for: $0) == .pending }.count
+                    let pending = events.reduce(0) { $0 + (store.paymentStatus(for: $1)?.pendingCount ?? 0) }
                     if pending > 0 {
-                        Label("\(pending) 筆還沒設定預扣款", systemImage: "exclamationmark.triangle")
+                        Label("\(pending) 筆還沒處理（預約轉帳／換匯）", systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(.orange)
                     }
                     if events.contains(where: \.needsConfirm) {
@@ -1150,11 +1150,19 @@ private struct UpcomingBillsCard: View {
                 case .autoDebit?:
                     Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
                 case .nothingDue?:
-                    Label("本期沒有要繳的金額，不用設定預扣款", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
-                case .scheduled?, .pending?:
-                    Toggle("這期已設定預扣款", isOn: Binding(
-                        get: { store.paymentStatus(for: ev) == .scheduled },
-                        set: { store.setPaymentScheduled($0, for: ev) }))
+                    Label("本期沒有要繳的金額，不用處理", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+                case .tasks(let tasks)?:
+                    // 每個要繳的幣別一個勾：台幣「已設定預約轉帳」、外幣「已換匯日幣」等；不用繳的幣別不列
+                    ForEach(tasks) { t in
+                        Toggle("這期\(t.doneTitle)", isOn: Binding(
+                            get: {
+                                if case .tasks(let now)? = store.paymentStatus(for: ev) {
+                                    return now.first { $0.currency == t.currency }?.done ?? false
+                                }
+                                return false
+                            },
+                            set: { store.setPaymentDone($0, currency: t.currency, for: ev) }))
+                    }
                 case nil:
                     EmptyView()
                 }
@@ -1174,22 +1182,38 @@ private struct UpcomingBillsCard: View {
         })
     }
 
-    /// 繳費方式：自動扣款、已設定預扣款，或還沒設定（快到期時變紅）
+    /// 繳費方式：自動扣款、已設定預約轉帳，或還沒設定（快到期時變紅）
     @ViewBuilder private func paymentStatusLabel(_ e: BillEvent, daysLeft: Int) -> some View {
         switch store.paymentStatus(for: e) {
         case .autoDebit?:
             Label("自動扣款", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
-        case .scheduled?:
-            Label("已設定預扣款", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
-        case .pending?:
-            Label("尚未設定預扣款", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(daysLeft <= 3 ? Color.red : Color.orange)
+        case .tasks(let tasks)?:
+            // 每個幣別一行：完成是綠色，還沒處理是橘色（剩 3 天內變紅）
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(tasks) { t in
+                    if t.done {
+                        Label(t.doneTitle + loanDetail(t), systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    } else {
+                        Label(t.pendingTitle, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(daysLeft <= 3 ? Color.red : Color.orange)
+                    }
+                }
+            }
         case .nothingDue?:
             Label("本期無需繳費", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
         case nil:
             EmptyView()
         }
+    }
+
+    /// 貸款的預約轉帳：設定到哪天、轉入哪個帳戶，例如「（到 2027/3/22・轉入 LINE Bank）」
+    private func loanDetail(_ t: PaymentTask) -> String {
+        var parts: [String] = []
+        if let until = t.scheduledUntil { parts.append("到 " + until.formatted(.dateTime.year().month(.defaultDigits).day())) }
+        if let to = t.transferTo { parts.append("轉入 " + to) }
+        return parts.isEmpty ? "" : "（" + parts.joined(separator: "・") + "）"
     }
 
     private func amountLine(_ a: Account, _ v: Double) -> some View {
