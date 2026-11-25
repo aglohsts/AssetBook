@@ -150,7 +150,31 @@ struct AccountsView: View {
             CategoryOverview(category: cat, snapshot: latest, previous: prev)
         }
 
-        if cat == .cash, !items.isEmpty {
+        if cat.isLiability, !items.isEmpty {
+            // 負債分成信用卡、貸款；信用卡依銀行排在一起
+            Section {
+                ForEach(LiabilityType.allCases.filter { t in items.contains { $0.resolvedLiabilityType == t } }) { t in
+                    let group = items.filter { $0.resolvedLiabilityType == t }
+                        .sorted { ($0.bankName ?? $0.name, $0.name) < ($1.bankName ?? $1.name, $1.name) }
+                    LiabilityGroupRow(type: t, accounts: group, snapshot: latest, previous: prev)
+                    accountRows(group, latest: latest, prev: prev, indent: 48)
+                }
+                Button {
+                    adding = cat
+                } label: {
+                    Label(cat.addTitle, systemImage: "plus.circle.fill")
+                        .foregroundStyle(cat.tint)
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                if let prev {
+                    Text("右側漲跌為與 \(prev.date.formatted(.dateTime.month(.defaultDigits).day())) 相比")
+                        .textCase(nil)
+                }
+            } footer: {
+                Text("這期沒有帳單的卡，在「更新資產」時按「無帳單」即可，不必刪除。種類可在帳戶編輯裡改。")
+            }
+        } else if cat == .cash, !items.isEmpty {
             // 現金與存款分成子分類（銀行、交易所與穩定幣、現鈔與儲值）：
             // 子分類是一列，底下縮排列出它的帳戶，和股票頁的持股一樣
             Section {
@@ -435,6 +459,40 @@ private struct CashGroupRow: View {
                 if let old {
                     DeltaText(delta: total - old, base: old, showPercentOnly: true).font(.caption)
                 }
+            }
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+/// 負債分頁裡的子分類列（信用卡、貸款）：顯示應繳／剩餘合計，底下縮排列出帳戶
+private struct LiabilityGroupRow: View {
+    @Environment(\.portfolio) private var store
+    let type: LiabilityType
+    let accounts: [Account]
+    let snapshot: Snapshot
+    let previous: Snapshot?
+
+    var body: some View {
+        // value(of:) 對負債是負的；這裡顯示成要繳／要還的正數
+        let owed = -accounts.reduce(0) { $0 + store.value(of: $1, in: snapshot) }
+        let old = previous.map { p in -accounts.reduce(0) { $0 + store.value(of: $1, in: p) } }
+        HStack(spacing: 12) {
+            Image(systemName: type.symbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(type.title).font(.body.weight(.medium))
+                Text(type == .card ? "\(accounts.count) 個帳戶 · 本期應繳" : "\(accounts.count) 筆 · 剩餘本金")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                MoneyText(value: owed).font(.title3.weight(.semibold))
+                if let old { LiabilityChange(now: owed, before: old).font(.caption) }
             }
         }
         .padding(.vertical, 3)

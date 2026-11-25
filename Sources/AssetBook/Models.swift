@@ -350,6 +350,7 @@ enum LiabilityType: String, Codable, CaseIterable, Identifiable {
     case card, loan
     var id: Self { self }
     var title: String { self == .card ? "信用卡" : "貸款" }
+    var symbol: String { self == .card ? "creditcard" : "building.columns" }
 }
 
 /// 使用者設定的一個實際日期（例如這期 12/3 繳費）。遇到假日可能提早或延後，所以存日期而不是「每月幾號」
