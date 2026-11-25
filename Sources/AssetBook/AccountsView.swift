@@ -835,7 +835,7 @@ struct AmountEditor: View {
                         TextField("金額", text: $text, prompt: Text("0"))
                             .focused($focused)
                             #if os(iOS)
-                            .keyboardType(.decimalPad)
+                            .keyboardType(.numbersAndPunctuation)
                             #endif
                             .multilineTextAlignment(.trailing)
                             .monospacedDigit()
