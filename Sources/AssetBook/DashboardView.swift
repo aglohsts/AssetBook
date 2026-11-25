@@ -1022,7 +1022,7 @@ private struct UpcomingBillsCard: View {
         if !events.isEmpty {
             Card {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("接下來要繳").font(.headline.weight(.medium))
+                    Text("繳費與結帳").font(.headline.weight(.medium))
                     Text("30 天內").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     if events.contains(where: \.needsConfirm) {
@@ -1030,14 +1030,41 @@ private struct UpcomingBillsCard: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
+                // 繳費和結帳分兩欄並排；畫面窄時上下排
+                let due = events.filter { $0.kind == .due }
+                let statement = events.filter { $0.kind == .statement }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        column("繳費", systemImage: "creditcard", events: due)
+                        column("結帳", systemImage: "doc.text", events: statement)
+                    }
+                    .frame(minWidth: 640)
+                    VStack(alignment: .leading, spacing: 16) {
+                        column("繳費", systemImage: "creditcard", events: due)
+                        column("結帳", systemImage: "doc.text", events: statement)
+                    }
+                }
+            }
+        }
+    }
+
+    private func column(_ title: String, systemImage: String, events: [BillEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            if events.isEmpty {
+                Text("30 天內沒有").font(.caption).foregroundStyle(.tertiary).padding(.vertical, 8)
+            } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(events.prefix(8).enumerated()), id: \.element.id) { i, e in
+                    ForEach(Array(events.prefix(6).enumerated()), id: \.element.id) { i, e in
                         if i > 0 { Divider().opacity(0.6) }
                         row(e)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     /// 點一列可以確認或改日期（遇到假日不同天）
@@ -1085,8 +1112,9 @@ private struct UpcomingBillsCard: View {
         return HStack(spacing: 12) {
             AccountAvatar(account: e.account, size: 30)
             VStack(alignment: .leading, spacing: 1) {
-                Text(e.account.name)
-                Text(e.title).font(.caption).foregroundStyle(.secondary)
+                Text(e.account.name).lineLimit(1)
+                // 欄位已經寫了繳費／結帳，這裡改標星期，方便看是不是遇到假日
+                Text(e.date.formatted(.dateTime.weekday(.wide))).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             if e.kind == .due, let amount, amount != 0 {
