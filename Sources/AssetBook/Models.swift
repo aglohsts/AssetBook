@@ -208,6 +208,9 @@ struct Account: Identifiable, Codable, Hashable {
     var icon: AccountIcon?
     /// 現金帳戶的子分類；nil 表示依名稱與備註自動判斷
     var cashGroup: CashGroup?
+    /// 負債：每月幾號結帳、幾號繳費（或扣款）；nil 表示沒設定
+    var statementDay: Int?
+    var dueDay: Int?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
@@ -224,7 +227,7 @@ struct Account: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup
+        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDay, dueDay
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -239,6 +242,8 @@ struct Account: Identifiable, Codable, Hashable {
         isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
         icon = try c.decodeIfPresent(AccountIcon.self, forKey: .icon)
         cashGroup = try c.decodeIfPresent(CashGroup.self, forKey: .cashGroup)
+        statementDay = try c.decodeIfPresent(Int.self, forKey: .statementDay)
+        dueDay = try c.decodeIfPresent(Int.self, forKey: .dueDay)
     }
 
     /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
@@ -309,5 +314,47 @@ struct Snapshot: Identifiable, Codable, Hashable {
         self.amounts = amounts
         self.holdings = holdings
         self.stockPrices = stockPrices
+    }
+}
+
+// MARK: - 結帳日與繳費日
+
+/// 負債帳戶的每月日子：結帳或繳費
+struct BillEvent: Identifiable, Hashable {
+    enum Kind { case statement, due }
+    let account: Account
+    let kind: Kind
+    let date: Date
+    var id: String { "\(account.id)-\(kind)-\(date.timeIntervalSince1970)" }
+    /// 月曆上的短字
+    var shortTitle: String { kind == .due ? "繳" : "結" }
+    var title: String { kind == .due ? (account.note.contains("扣款") ? "扣款" : "繳費") : "結帳" }
+}
+
+extension Calendar {
+    /// 某個月的第 day 號；月份沒有那一天（例如 2 月 30 號）就用月底
+    func date(day: Int, inMonthOf month: Date) -> Date? {
+        guard let start = dateInterval(of: .month, for: month)?.start,
+              let count = range(of: .day, in: .month, for: month)?.count else { return nil }
+        return date(byAdding: .day, value: min(max(day, 1), count) - 1, to: start)
+    }
+}
+
+extension Account {
+    /// 這個帳戶在 from 當天或之後、within 天內的結帳日與繳費日
+    func billEvents(from: Date, within days: Int, calendar cal: Calendar = .current) -> [BillEvent] {
+        let today = cal.startOfDay(for: from)
+        guard let end = cal.date(byAdding: .day, value: days, to: today) else { return [] }
+        var out: [BillEvent] = []
+        for (day, kind) in [(statementDay, BillEvent.Kind.statement), (dueDay, .due)] {
+            guard let day else { continue }
+            var month = today
+            while let d = cal.date(day: day, inMonthOf: month), d <= end {
+                if d >= today { out.append(BillEvent(account: self, kind: kind, date: d)) }
+                guard let next = cal.date(byAdding: .month, value: 1, to: month) else { break }
+                month = next
+            }
+        }
+        return out
     }
 }

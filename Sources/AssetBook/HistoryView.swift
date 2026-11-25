@@ -133,13 +133,18 @@ struct HistoryView: View {
         let byDay = Dictionary((store.autoSnapshots + store.snapshots).map { (cal.startOfDay(for: $0.date), $0) },
                                uniquingKeysWith: { _, manual in manual })
         let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+        // 這個月每一天的結帳日、繳費日
+        let monthLength = cal.range(of: .day, in: .month, for: month)?.count ?? 31
+        let bills = Dictionary(grouping: store.activeAccounts(in: .liability)
+            .flatMap { $0.billEvents(from: month, within: monthLength - 1) }) { cal.startOfDay(for: $0.date) }
         return LazyVGrid(columns: cols, spacing: 6) {
             ForEach(Array(dayCells.enumerated()), id: \.offset) { _, day in
                 if let day {
                     if let snap = byDay[cal.startOfDay(for: day)] {
                         let auto = store.isAuto(snap)
                         NavigationLink(value: snap) {
-                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap), isAuto: auto)
+                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap), isAuto: auto,
+                                    bills: bills[cal.startOfDay(for: day)] ?? [])
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -150,7 +155,7 @@ struct HistoryView: View {
                             }
                         }
                     } else {
-                        DayCell(day: day, snapshot: nil, previous: nil)
+                        DayCell(day: day, snapshot: nil, previous: nil, bills: bills[cal.startOfDay(for: day)] ?? [])
                     }
                 } else {
                     Color.clear.frame(height: 76)
@@ -227,6 +232,8 @@ private struct DayCell: View {
     let previous: Snapshot?
     /// 估算（自動估值點）：數字前加 ≈、虛線框
     var isAuto = false
+    /// 這天的結帳日、繳費日
+    var bills: [BillEvent] = []
 
     var body: some View {
         let isToday = Calendar.current.isDateInToday(day)
@@ -254,6 +261,18 @@ private struct DayCell: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                         .foregroundStyle(store.deltaColor(d))
+                }
+            }
+            if !bills.isEmpty {
+                Spacer(minLength: 0)
+                ForEach(bills.prefix(2)) { b in
+                    Text("\(b.shortTitle) \(b.account.name)")
+                        .font(.system(size: 10))
+                        .lineLimit(1)
+                        .foregroundStyle(b.kind == .due ? Color.red : Color.secondary)
+                }
+                if bills.count > 2 {
+                    Text("+\(bills.count - 2)").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
         }

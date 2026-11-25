@@ -967,6 +967,9 @@ struct AccountEditor: View {
     @State private var usesPortfolio: Bool
     /// 現金子分類；nil 為自動判斷
     @State private var cashGroup: CashGroup?
+    /// 負債：每月結帳日、繳費日
+    @State private var statementDay: Int?
+    @State private var dueDay: Int?
     @State private var confirmDelete = false
 
     // 圖示
@@ -1026,6 +1029,8 @@ struct AccountEditor: View {
         _currency = State(initialValue: account?.currency ?? .twd)
         _usesPortfolio = State(initialValue: account.map(\.isPortfolio) ?? (category == .stocks))
         _cashGroup = State(initialValue: account?.cashGroup)
+        _statementDay = State(initialValue: account?.statementDay)
+        _dueDay = State(initialValue: account?.dueDay)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1127,6 +1132,17 @@ struct AccountEditor: View {
                     TextField("備註", text: $note, prompt: Text(category.isLiability ? "選填，例如：每月 15 號結帳" : "選填"))
                 }
 
+                if category.isLiability {
+                    Section {
+                        dayPicker("每月結帳日", selection: $statementDay)
+                        dayPicker("每月繳費日", selection: $dueDay)
+                    } header: {
+                        Text("結帳與繳費")
+                    } footer: {
+                        Text("選填。設定後會顯示在總覽的「接下來要繳」和歷史紀錄的月曆上。貸款可以把扣款日填在繳費日。")
+                    }
+                }
+
                 Section {
                     Picker("分類", selection: $category) {
                         ForEach(AssetCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
@@ -1226,6 +1242,13 @@ struct AccountEditor: View {
         #endif
     }
 
+    private func dayPicker(_ title: String, selection: Binding<Int?>) -> some View {
+        Picker(title, selection: selection) {
+            Text("不設定").tag(Int?.none)
+            ForEach(1...31, id: \.self) { d in Text("每月 \(d) 號").tag(Int?.some(d)) }
+        }
+    }
+
     private func save() {
         if iconChoice == .custom, let pendingImage {
             try? IconLoader.shared.setCustom(pendingImage, accountID: draftID)
@@ -1235,6 +1258,8 @@ struct AccountEditor: View {
             a.note = note
             a.category = category
             a.cashGroup = category == .cash ? cashGroup : nil
+            a.statementDay = category.isLiability ? statementDay : nil
+            a.dueDay = category.isLiability ? dueDay : nil
             a.icon = resolvedIcon
             if a.category == .stocks && a.valuation == .balance && usesPortfolio {
                 a.valuation = .portfolio
@@ -1244,6 +1269,8 @@ struct AccountEditor: View {
             var a = draftAccount(icon: resolvedIcon)
             a.name = trimmedName
             a.cashGroup = category == .cash ? cashGroup : nil
+            a.statementDay = category.isLiability ? statementDay : nil
+            a.dueDay = category.isLiability ? dueDay : nil
             store.add(a)
             onCreate?(a)
         }

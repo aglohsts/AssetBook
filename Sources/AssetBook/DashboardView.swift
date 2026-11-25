@@ -17,6 +17,7 @@ struct DashboardView: View {
                 VStack(spacing: 16) {
                     NetWorthCard(snapshot: current, record: latest, comparison: comparison, mode: $mode)
                     StatStrip(snapshot: current)
+                    UpcomingBillsCard(record: latest)
                     CompositionCard(snapshot: current, previous: comparison, tab: $tab)
                     MarketCard(snapshot: current, previous: comparison)
                 }
@@ -997,5 +998,68 @@ private struct MarketCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+// MARK: - 接下來要繳
+
+/// 負債帳戶設定了結帳日、繳費日時，列出接下來 30 天內的日子；繳費日帶出最近一筆紀錄的應繳金額
+private struct UpcomingBillsCard: View {
+    @Environment(\.portfolio) private var store
+    let record: Snapshot
+
+    private var events: [BillEvent] {
+        store.activeAccounts(in: .liability)
+            .flatMap { $0.billEvents(from: .now, within: 30) }
+            .sorted { $0.date < $1.date }
+    }
+
+    var body: some View {
+        let events = events
+        if !events.isEmpty {
+            Card {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("接下來要繳").font(.headline.weight(.medium))
+                    Text("30 天內").font(.caption).foregroundStyle(.secondary)
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(events.prefix(8).enumerated()), id: \.element.id) { i, e in
+                        if i > 0 { Divider().opacity(0.6) }
+                        row(e)
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ e: BillEvent) -> some View {
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: e.date).day ?? 0
+        let urgent = e.kind == .due && days <= 3
+        let amount = record.amounts[e.account.id]
+        return HStack(spacing: 12) {
+            AccountAvatar(account: e.account, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(e.account.name)
+                Text(e.title).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if e.kind == .due, let amount, amount != 0 {
+                if amount < 0 {
+                    Text("退款").font(.caption).foregroundStyle(.green)
+                }
+                MoneyText(value: abs(amount) * store.rate(e.account.currency, in: record))
+                    .font(.subheadline)
+            }
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(e.date.formatted(.dateTime.month(.defaultDigits).day()))
+                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                Text(days == 0 ? "今天" : days == 1 ? "明天" : "剩 \(days) 天")
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(urgent ? Color.red : Color.secondary)
+            }
+            .frame(minWidth: 64, alignment: .trailing)
+        }
+        .padding(.vertical, 8)
     }
 }
