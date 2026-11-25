@@ -476,7 +476,12 @@ private struct CompositionCard: View {
         let count: Int
         let category: AssetCategory?
 
+        /// 現金那一塊：扣掉的負債（金額）與扣之前的存款，用在圖例的說明
+        var deducted: Double = 0
+        var gross: Double = 0
+
         var isLiabilityPart: Bool { category?.isLiability ?? false }
+
     }
 
     private var parts: [Part] {
@@ -569,22 +574,18 @@ private struct CompositionCard: View {
         }
     }
 
-    /// 外圈是資產組成（合計 100%）；負債畫成內側的細紅環，長度 = 負債佔總資產的比例。
+    /// 圓環是資產組成（合計 = 總資產）；負債是現金那一塊裡面的細灰線。
     /// 中間預設顯示淨資產（總資產 − 負債）
     private func donut(_ assetParts: [Part], debtPart: Part?, assets: Double, debt: Double) -> some View {
-        let total = max(assets, 1)
-        let current = (assetParts + [debtPart, netPart(assets: assets, debt: debt)].compactMap { $0 })
-            .first { $0.id == selected }
+        let shown = netParts(assetParts, debtPart: debtPart)
+        let netTotal = max(shown.reduce(0) { $0 + max($1.value, 0) }, 1)
+        let current = (shown + [debtPart].compactMap { $0 }).first { $0.id == selected }
+        let cash = assetParts.first { $0.id == debtSourceID }
         return DonutChart(slices: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
-                          selected: $selected, progress: appeared ? 1 : 0)
-            .overlay {
-                if let debtPart {
-                    DebtRing(debtFraction: debt / total,
-                             assets: assetParts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
-                             progress: appeared ? 1 : 0, debtColor: debtPart.color,
-                             selectedID: selected, debtID: debtPart.id, netID: Self.netID)
-                }
-            }
+                          selected: $selected, progress: appeared ? 1 : 0,
+                          inset: debt > 0 && (cash?.value ?? 0) > 0
+                            ? .init(sliceID: debtSourceID, fraction: debt / cash!.value, color: Self.debtGray)
+                            : nil)
             .overlay {
                 VStack(spacing: 3) {
                     if let current {
@@ -595,7 +596,8 @@ private struct CompositionCard: View {
                             .foregroundStyle(.secondary)
                         CountingMoney(value: isDebt ? -current.value : current.value, hidden: store.hideAmounts)
                             .font(.system(size: 22, weight: .regular))
-                        Text((isDebt ? "佔總資產 −" : isNet ? "佔總資產 " : "") + (current.value / total).formatted(.percent.precision(.fractionLength(1))))
+                        Text(isDebt ? "從現金與存款扣除"
+                             : (isNet ? "" : "佔淨資產 ") + (max(current.value, 0) / netTotal).formatted(.percent.precision(.fractionLength(1))))
                             .font(.subheadline)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
@@ -612,44 +614,48 @@ private struct CompositionCard: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                // 內側還有一圈負債細環，文字再往內縮，避免碰到
-                .padding(.horizontal, 56)
+                .padding(.horizontal, 46)
                 .allowsHitTesting(false)
                 .animation(.snappy(duration: 0.25), value: selected)
             }
     }
 
     /// 資產各類以總資產為 100%；負債放在分隔線下，以負數顯示（佔總資產多少要扣掉）
+    /// 比例的算法：加密貨幣、股票、現金與存款（扣掉負債）三項，合計是淨資產。負債不單獨算一項
     private func legend(_ assetParts: [Part], debtPart: Part?, assets: Double) -> some View {
-        let total = max(assets, 1)
+        let parts = netParts(assetParts, debtPart: debtPart)
+        let total = max(parts.reduce(0) { $0 + max($1.value, 0) }, 1)
         return VStack(spacing: 4) {
-            ForEach(assetParts) { p in
-                legendRow(p, share: p.value / total)
-            }
-            if let debtPart {
-                Divider().padding(.horizontal, 12)
-                legendRow(debtPart, share: debtPart.value / total, isDeduction: true)
-                if let net = netPart(assets: assets, debt: debtPart.value) {
-                    legendRow(net, share: net.value / total)
-                }
+            ForEach(parts) { p in
+                legendRow(p, share: max(p.value, 0) / total)
             }
         }
     }
 
+    /// 把負債從現金（幣別分組時是台幣）那一項扣掉；上一筆的數字也一樣扣，漲跌才對得上
+    private func netParts(_ assetParts: [Part], debtPart: Part?) -> [Part] {
+        guard let debtPart, debtPart.value > 0 else { return assetParts }
+        return assetParts.map { p in
+            guard p.id == debtSourceID else { return p }
+            return Part(id: p.id, title: p.title, symbol: p.symbol, color: p.color,
+                        value: p.value - debtPart.value,
+                        previous: zip2(p.previous, debtPart.previous).map { $0 - $1 },
+                        count: p.count, category: p.category, deducted: debtPart.value, gross: p.value)
+        }
+    }
+
+    private func zip2(_ a: Double?, _ b: Double?) -> (Double, Double)? {
+        guard let a, let b else { return nil }
+        return (a, b)
+    }
+
     static let netID = "net-worth"
 
-    /// 內圈灰色那段：總資產扣掉負債，真正屬於自己的部分
-    private func netPart(assets: Double, debt: Double) -> Part? {
-        guard debt > 0 else { return nil }
-        let liability = AssetCategory.liability
-        return Part(id: Self.netID, title: "淨資產", symbol: "checkmark.seal", color: Color.primary.opacity(0.35),
-                    value: assets - debt,
-                    previous: previous.map { s in
-                        AssetCategory.allCases.filter { !$0.isLiability }.reduce(0) { $0 + max(store.total($1, in: s), 0) }
-                            + store.total(liability, in: s)
-                    },
-                    count: 0, category: nil)
-    }
+    /// 負債是現金要還掉的部分：在「現金與存款」（幣別分組時是台幣）那一塊裡面畫一條更細的灰線，
+    /// 長度是負債佔現金的比例。現金本身完整呈現
+    private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
+    static let debtGray = Color.primary.opacity(0.28)
+
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
         let isSelected = selected == p.id
@@ -659,7 +665,9 @@ private struct CompositionCard: View {
                 Circle().fill(p.color).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(p.title).font(.subheadline.weight(.medium))
-                    Text(p.id == Self.netID ? "總資產 − 負債" : "\(p.count) 個帳戶")
+                    Text(p.deducted > 0 && !store.hideAmounts
+                         ? "存款 \(Fmt.money(p.gross, .twd)) − 負債 \(Fmt.money(p.deducted, .twd))"
+                         : p.id == Self.netID ? "總資產 − 負債" : "\(p.count) 個帳戶")
                         .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
@@ -717,69 +725,6 @@ private struct CompositionCard: View {
     }
 }
 
-/// 圓環內側的細環：一整圈代表總資產。紅色那段是負債，其餘是淨資產（真正屬於自己的部分），
-/// 淨資產那段按外圈的比例分成各分類的顏色、半透明，像是外圈縮小後扣掉負債的樣子
-private struct DebtRing: View {
-    struct Slice { let id: String; let color: Color; let value: Double }
-    /// 負債佔總資產的比例（0...1）
-    let debtFraction: Double
-    /// 外圈各分類（用來把淨資產那段按比例上色）
-    let assets: [Slice]
-    /// 進場動畫進度
-    let progress: Double
-    let debtColor: Color
-    var selectedID: String?
-    let debtID: String
-    let netID: String
-    private let outerWidth: CGFloat = 26
-
-    var body: some View {
-        GeometryReader { geo in
-            let side = min(geo.size.width, geo.size.height)
-            // 跟 DonutChart 的外圈半徑一致，再往內縮一點
-            let radius = (side - outerWidth - 18) / 2 - outerWidth / 2 - 10
-            let f = min(max(debtFraction, 0), 1)
-            // 兩段之間留一點空隙（圓頭會各多出半個線寬）
-            let gap = f > 0 && f < 1 ? (9 + 4) / (2 * .pi * radius) : 0
-            let segGap = (6 + 4) / (2 * .pi * radius)
-            ZStack {
-                arc(from: 0, to: f, gap: gap, color: debtColor, ids: [debtID])
-                // 淨資產那段：依外圈比例切成各分類的顏色
-                let total = max(assets.reduce(0) { $0 + $1.value }, 1)
-                let spans = assets.reduce(into: [(Slice, Double, Double)]()) { out, a in
-                    let start = out.last?.2 ?? f
-                    out.append((a, start, start + (1 - f) * a.value / total))
-                }
-                ForEach(Array(spans.enumerated()), id: \.offset) { i, item in
-                    // 只有一段時兩端接負債，用 gap；多段時中間的接縫用較小的 segGap
-                    let lead = i == 0 ? gap : segGap
-                    let trail = i == spans.count - 1 ? gap : segGap
-                    arc(from: item.1 - gap / 2 + lead / 2, to: item.2 + gap / 2 - trail / 2, gap: gap,
-                        color: item.0.color.opacity(0.45), ids: [netID, item.0.id])
-                }
-            }
-            .frame(width: radius * 2, height: radius * 2)
-            .frame(width: geo.size.width, height: geo.size.height)
-        }
-        .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.6), value: debtFraction)
-        .animation(.easeOut(duration: 0.2), value: selectedID)
-    }
-
-    @ViewBuilder private func arc(from a: Double, to b: Double, gap: Double, color: Color, ids: [String]) -> some View {
-        if b - a > gap + 0.0005 {
-            let isSelected = selectedID.map(ids.contains) ?? false
-            let from = (a + gap / 2) * progress
-            let to = max((b - gap / 2) * progress, from + 0.0005)
-            Circle()
-                .trim(from: from, to: to)
-                .stroke(color, style: StrokeStyle(lineWidth: isSelected ? 10 : 6, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .opacity(selectedID == nil || isSelected ? 1 : 0.28)
-        }
-    }
-}
-
 /// 自己畫的圓環圖：每一段是一條圓弧，進場時順時針展開；被選取的那段會變粗，其他變淡
 private struct DonutChart: View {
     struct Slice: Identifiable {
@@ -795,11 +740,19 @@ private struct DonutChart: View {
         let end: CGFloat
     }
 
+    /// 畫在某一段裡面、更細的一條線（例如現金裡要還掉的負債）：從那一段的尾端往前，佔那一段的 fraction
+    struct Inset {
+        let sliceID: String
+        let fraction: Double
+        let color: Color
+    }
+
     let slices: [Slice]
     @Binding var selected: String?
     /// 0 → 1：進場動畫的進度
     var progress: CGFloat
     var lineWidth: CGFloat = 26
+    var inset: Inset? = nil
 
     /// 每一段的弧長（佔整圈的比例）。太小的段落放大到剛好放得下一顆圓頭，
     /// 多出來的長度從其他段按比例扣掉，所以每一段都能維持圓角。
@@ -843,6 +796,9 @@ private struct DonutChart: View {
                 ForEach(arcs) { arc in
                     segment(arc, gap: gap, radius: radius)
                 }
+                if let inset, let arc = arcs.first(where: { $0.id == inset.sliceID }) {
+                    insetLine(inset, in: arc, gap: gap, radius: radius)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Circle())
@@ -859,6 +815,24 @@ private struct DonutChart: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .animation(.easeOut(duration: 0.4), value: slices.map(\.value))
+    }
+
+    /// 段落中間的細線：跟著那一段一起淡出、一起進場
+    @ViewBuilder private func insetLine(_ inset: Inset, in arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
+        let visibleStart = arc.start + gap / 2, visibleEnd = arc.end - gap / 2
+        let width: CGFloat = 7
+        // 細線也是圓頭：兩端各縮半個細線寬，才不會凸出段落
+        let capInset = width / 2 / (2 * .pi * radius)
+        let length = max((visibleEnd - visibleStart) * CGFloat(min(max(inset.fraction, 0), 1)) - 2 * capInset, 0.0005)
+        let to = visibleEnd - capInset
+        let from = max(to - length, visibleStart + capInset)
+        Circle()
+            .trim(from: from * progress, to: max(to * progress, from * progress))
+            .stroke(inset.color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+            .frame(width: radius * 2, height: radius * 2)
+            .rotationEffect(.degrees(-90))
+            .opacity(selected == nil || selected == arc.id ? 1 : 0.28)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder private func segment(_ arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
