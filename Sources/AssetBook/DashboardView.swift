@@ -1062,6 +1062,11 @@ private struct UpcomingBillsCard: View {
                     Text("繳費與結帳").font(.headline.weight(.medium))
                     Text("30 天內").font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    let pending = events.filter { store.paymentStatus(for: $0) == .pending }.count
+                    if pending > 0 {
+                        Label("\(pending) 筆還沒設定預扣款", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     if events.contains(where: \.needsConfirm) {
                         Label("有日期從上個月帶入，請確認", systemImage: "exclamationmark.circle")
                             .font(.caption).foregroundStyle(.orange)
@@ -1141,6 +1146,16 @@ private struct UpcomingBillsCard: View {
                 DatePicker("日期", selection: $draftDate, displayedComponents: .date)
                     .datePickerStyle(.graphical)
                     .labelsHidden()
+                switch store.paymentStatus(for: ev) {
+                case .autoDebit?:
+                    Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                case .scheduled?, .pending?:
+                    Toggle("這期已設定預扣款", isOn: Binding(
+                        get: { store.paymentStatus(for: ev) == .scheduled },
+                        set: { store.setPaymentScheduled($0, for: ev) }))
+                case nil:
+                    EmptyView()
+                }
                 HStack {
                     Spacer()
                     Button("取消") { editing = nil }
@@ -1155,6 +1170,22 @@ private struct UpcomingBillsCard: View {
             .padding()
             .frame(width: 300)
         })
+    }
+
+    /// 繳費方式：自動扣款、已設定預扣款，或還沒設定（快到期時變紅）
+    @ViewBuilder private func paymentStatusLabel(_ e: BillEvent, daysLeft: Int) -> some View {
+        switch store.paymentStatus(for: e) {
+        case .autoDebit?:
+            Label("自動扣款", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+        case .scheduled?:
+            Label("已設定預扣款", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+        case .pending?:
+            Label("尚未設定預扣款", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(daysLeft <= 3 ? Color.red : Color.orange)
+        case nil:
+            EmptyView()
+        }
     }
 
     private func rowContent(_ e: BillEvent) -> some View {
@@ -1175,6 +1206,7 @@ private struct UpcomingBillsCard: View {
                 // 欄位已經寫了繳費／結帳，這裡標星期（方便看是不是遇到假日）；同銀行多張卡時列出卡名
                 Text([e.date.formatted(.dateTime.weekday(.wide)), e.memberNames].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                paymentStatusLabel(e, daysLeft: days)
             }
             Spacer(minLength: 8)
             if e.kind == .due, !owed.isEmpty {

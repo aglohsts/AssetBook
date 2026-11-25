@@ -404,6 +404,39 @@ final class PortfolioStore {
         return out.sorted { $0.date < $1.date }
     }
 
+    /// 信用卡這一期的繳費狀態（同銀行共用日期的卡，任一張設定了就算整組）
+    func paymentStatus(for event: BillEvent) -> PaymentStatus? {
+        guard event.kind == .due, !event.account.isLoan else { return nil }
+        let group = event.accounts
+        if group.contains(where: { $0.autoDebit == true }) { return .autoDebit }
+        let cal = Calendar.current
+        // 預扣款設定的那一期：日期之後若有微調（假日），前後 10 天內都算同一期
+        let scheduled = group.contains { a in
+            guard let d = a.paymentScheduledFor else { return false }
+            return abs(cal.dateComponents([.day], from: cal.startOfDay(for: d), to: event.date).day ?? 99) <= 10
+        }
+        return scheduled ? .scheduled : .pending
+    }
+
+    /// 設定自動扣款；同銀行共用日期的卡一起改（同一個扣款帳戶）
+    func setAutoDebit(_ on: Bool, for accountID: UUID) {
+        guard let base = account(id: accountID) else { return }
+        for member in billGroup(for: base) {
+            guard let i = accounts.firstIndex(where: { $0.id == member.id }) else { continue }
+            accounts[i].autoDebit = on ? true : nil
+        }
+        persist()
+    }
+
+    /// 勾選或取消「這期已設定預扣款」；同銀行共用日期的卡一起改
+    func setPaymentScheduled(_ on: Bool, for event: BillEvent) {
+        for member in event.accounts {
+            guard let i = accounts.firstIndex(where: { $0.id == member.id }) else { continue }
+            accounts[i].paymentScheduledFor = on ? event.date : nil
+        }
+        persist()
+    }
+
     /// 確認或修改某一期的結帳日、繳費日（之後的月份會從這天帶入）；同銀行共用日期的卡一起改
     func setBillDate(_ date: Date?, kind: BillEvent.Kind, for accountID: UUID) {
         guard let base = account(id: accountID) else { return }

@@ -983,6 +983,8 @@ struct AccountEditor: View {
     @State private var loanPaymentText: String
     @State private var loanHasStart: Bool
     @State private var loanStart: Date
+    /// 信用卡：自動扣款
+    @State private var autoDebit: Bool
     @State private var confirmDelete = false
 
     // 圖示
@@ -1048,6 +1050,7 @@ struct AccountEditor: View {
         _loanPaymentText = State(initialValue: account?.loanMonthlyPayment.map { Fmt.number($0, digits: 0...2).replacingOccurrences(of: ",", with: "") } ?? "")
         _loanHasStart = State(initialValue: account?.loanStartDate != nil)
         _loanStart = State(initialValue: account?.loanStartDate ?? .now)
+        _autoDebit = State(initialValue: account?.autoDebit ?? false)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -1202,6 +1205,14 @@ struct AccountEditor: View {
                         }
                         billDateRow("繳費日", kind: .due, date: $dueDate)
                         billDateRow("結帳日", kind: .statement, date: $statementDate)
+                        Toggle(isOn: $autoDebit) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("自動扣款")
+                                Text(autoDebit ? "從銀行帳戶自動扣，每期都不用另外處理"
+                                               : "沒有自動扣款：每期要在繳費日前設定預約轉帳，總覽會提醒")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     } header: {
                         Text("結帳與繳費")
                     } footer: {
@@ -1390,6 +1401,11 @@ struct AccountEditor: View {
                 a.valuation = .portfolio
             }
             store.update(a)
+            // 自動扣款：同銀行共用日期的卡一起改
+            if a.category.isLiability && !a.isLoan && autoDebit != (account?.autoDebit ?? false) {
+                if a.sharesBillDates { store.setAutoDebit(autoDebit, for: a.id) }
+                else if var b = store.account(id: a.id) { b.autoDebit = autoDebit ? true : nil; store.update(b) }
+            }
             // 改了日期：同銀行共用日期的卡一起改
             if a.category.isLiability && a.sharesBillDates {
                 if dueDate != initialDueDate { store.setBillDate(dueDate, kind: .due, for: a.id) }
@@ -1401,6 +1417,7 @@ struct AccountEditor: View {
             a.cashGroup = category == .cash ? cashGroup : nil
             a.statementDate = category.isLiability ? statementDate.map(BillDate.init) : nil
             a.dueDate = category.isLiability ? dueDate.map(BillDate.init) : nil
+            a.autoDebit = category.isLiability && autoDebit ? true : nil
             if category.isLiability { applyLoanSettings(to: &a) }
             store.add(a)
             onCreate?(a)

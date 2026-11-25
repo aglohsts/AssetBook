@@ -219,6 +219,10 @@ struct Account: Identifiable, Codable, Hashable {
     var loanPaymentDay: Int?
     var loanMonthlyPayment: Double?
     var loanStartDate: Date?
+    /// 信用卡：從銀行帳戶自動扣款（每期都不用處理）
+    var autoDebit: Bool?
+    /// 信用卡：已設定預約轉帳（預扣款）的那一期繳費日；過了那期就要重新設定
+    var paymentScheduledFor: Date?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
@@ -236,7 +240,7 @@ struct Account: Identifiable, Codable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, note, category, currency, valuation, isArchived, icon, cashGroup, statementDate, dueDate, shareBillDates,
-             liabilityType, loanPaymentDay, loanMonthlyPayment, loanStartDate
+             liabilityType, loanPaymentDay, loanMonthlyPayment, loanStartDate, autoDebit, paymentScheduledFor
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -258,6 +262,8 @@ struct Account: Identifiable, Codable, Hashable {
         loanPaymentDay = try c.decodeIfPresent(Int.self, forKey: .loanPaymentDay)
         loanMonthlyPayment = try c.decodeIfPresent(Double.self, forKey: .loanMonthlyPayment)
         loanStartDate = try c.decodeIfPresent(Date.self, forKey: .loanStartDate)
+        autoDebit = try c.decodeIfPresent(Bool.self, forKey: .autoDebit)
+        paymentScheduledFor = try c.decodeIfPresent(Date.self, forKey: .paymentScheduledFor)
     }
 
     /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
@@ -343,6 +349,16 @@ enum LiabilityType: String, Codable, CaseIterable, Identifiable {
 /// 使用者設定的一個實際日期（例如這期 12/3 繳費）。遇到假日可能提早或延後，所以存日期而不是「每月幾號」
 struct BillDate: Codable, Hashable {
     var date: Date
+}
+
+/// 信用卡某一期繳費的狀態
+enum PaymentStatus {
+    /// 自動扣款，不用處理
+    case autoDebit
+    /// 這期已設定預約轉帳
+    case scheduled
+    /// 還沒設定，要在繳費日前處理
+    case pending
 }
 
 /// 負債帳戶的一個結帳日或繳費日。同一間銀行共用日期的卡合成一筆（accounts 有多個）
