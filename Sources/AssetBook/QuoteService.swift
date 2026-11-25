@@ -41,13 +41,15 @@ enum QuoteService {
 
     // MARK: 來源
 
-    /// Yahoo 的匯率是盤中即時報價；日圓用 USDTWD ÷ USDJPY，精度比直接取 JPYTWD 高
+    /// Yahoo 的匯率是盤中即時報價；日圓、英鎊用 USDTWD ÷ USDJPY（USDGBP），精度比直接取 JPYTWD 高
     private static func yahooFX() async throws -> [Quote: Double] {
         async let twd = StockService.yahooQuote("USDTWD=X")
         async let jpy = StockService.yahooQuote("USDJPY=X")
+        async let gbp = StockService.yahooQuote("USDGBP=X")
         guard let t = await twd?.price else { throw QuoteError.badResponse("Yahoo 匯率") }
         var out: [Quote: Double] = [.usdTWD: t]
         if let j = await jpy?.price, j > 0 { out[.jpyTWD] = t / j }
+        if let g = await gbp?.price, g > 0 { out[.gbpTWD] = t / g }
         return out
     }
 
@@ -57,7 +59,9 @@ enum QuoteService {
         guard r.result == "success", let twd = r.rates["TWD"], let jpy = r.rates["JPY"] else {
             throw QuoteError.badResponse("ExchangeRate-API")
         }
-        return [.usdTWD: twd, .jpyTWD: twd / jpy]
+        var out: [Quote: Double] = [.usdTWD: twd, .jpyTWD: twd / jpy]
+        if let gbp = r.rates["GBP"], gbp > 0 { out[.gbpTWD] = twd / gbp }
+        return out
     }
 
     /// CoinGecko 免費額度很容易 429，所以幣價優先用 Yahoo
@@ -91,6 +95,7 @@ enum QuoteService {
         if let twd = r.usd["twd"] {
             out[.usdTWD] = twd
             if let jpy = r.usd["jpy"], jpy > 0 { out[.jpyTWD] = twd / jpy }
+            if let gbp = r.usd["gbp"], gbp > 0 { out[.gbpTWD] = twd / gbp }
         }
         if let btc = r.usd["btc"], btc > 0 { out[.btcUSD] = 1 / btc }
         if let cro = r.usd["cro"], cro > 0 { out[.croUSD] = 1 / cro }

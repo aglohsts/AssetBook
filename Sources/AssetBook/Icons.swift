@@ -100,6 +100,7 @@ enum IconCatalog {
         case .twd: "TW"
         case .usd: "US"
         case .jpy: "JP"
+        case .gbp: "GB"
         }
     }
 

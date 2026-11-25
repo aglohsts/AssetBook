@@ -233,6 +233,7 @@ struct SecuritySearchSheet: View {
         case .twd: "台股"
         case .usd: "美股"
         case .jpy: "日股"
+        case .gbp: "英股"
         }
     }
 

@@ -209,6 +209,7 @@ final class PortfolioStore {
         case .twd: 1
         case .usd: s.quotes[.usdTWD] ?? 0
         case .jpy: s.quotes[.jpyTWD] ?? 0
+        case .gbp: s.quotes[.gbpTWD] ?? 0
         }
     }
 
