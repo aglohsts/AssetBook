@@ -1149,6 +1149,8 @@ private struct UpcomingBillsCard: View {
                 switch store.paymentStatus(for: ev) {
                 case .autoDebit?:
                     Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                case .nothingDue?:
+                    Label("本期沒有要繳的金額，不用設定預扣款", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
                 case .scheduled?, .pending?:
                     Toggle("這期已設定預扣款", isOn: Binding(
                         get: { store.paymentStatus(for: ev) == .scheduled },
@@ -1183,6 +1185,8 @@ private struct UpcomingBillsCard: View {
             Label("尚未設定預扣款", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(daysLeft <= 3 ? Color.red : Color.orange)
+        case .nothingDue?:
+            Label("本期無需繳費", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
         case nil:
             EmptyView()
         }

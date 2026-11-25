@@ -359,6 +359,8 @@ enum PaymentStatus {
     case scheduled
     /// 還沒設定，要在繳費日前處理
     case pending
+    /// 本期沒有要繳的金額（0、留空或退款），不用設定
+    case nothingDue
 }
 
 /// 負債帳戶的一個結帳日或繳費日。同一間銀行共用日期的卡合成一筆（accounts 有多個）

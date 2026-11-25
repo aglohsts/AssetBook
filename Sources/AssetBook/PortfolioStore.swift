@@ -409,6 +409,8 @@ final class PortfolioStore {
         guard event.kind == .due, !event.account.isLoan else { return nil }
         let group = event.accounts
         if group.contains(where: { $0.autoDebit == true }) { return .autoDebit }
+        // 最近一筆紀錄裡，這組卡都沒有要繳的錢（0、留空或退款）：不用設定預扣款
+        if !group.contains(where: { (latest?.amounts[$0.id] ?? 0) > 0 }) { return .nothingDue }
         let cal = Calendar.current
         // 預扣款設定的那一期：日期之後若有微調（假日），前後 10 天內都算同一期
         let scheduled = group.contains { a in
