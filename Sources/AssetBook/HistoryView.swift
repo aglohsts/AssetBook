@@ -336,16 +336,19 @@ struct SnapshotDetailView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        if store.isAuto(snapshot) {
-                            Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 22)).foregroundStyle(.secondary)
+                    let auto = store.isAuto(snapshot)
+                    MoneyText(value: store.netWorth(snapshot))
+                        .font(.system(size: 34, weight: .regular))
+                        .foregroundStyle(auto ? Color.secondary : Color.primary)
+                    // 跟總覽一樣：數字下一行標出來源，筆＝手動記錄，走勢線＝用行情估的
+                    HStack(spacing: 8) {
+                        Image(systemName: auto ? "chart.line.uptrend.xyaxis" : "pencil")
+                            .foregroundStyle(.secondary)
+                            .help(auto ? "估算：餘額沿用最近一次記錄，行情用當天的" : "手動記錄")
+                        if let prev {
+                            let old = store.netWorth(prev)
+                            DeltaBadge(delta: store.netWorth(snapshot) - old, base: old)
                         }
-                        MoneyText(value: store.netWorth(snapshot))
-                    }
-                    .font(.system(size: 34, weight: .regular))
-                    if let prev {
-                        let old = store.netWorth(prev)
-                        DeltaBadge(delta: store.netWorth(snapshot) - old, base: old)
                     }
                 }
                 .padding(.vertical, 6)
