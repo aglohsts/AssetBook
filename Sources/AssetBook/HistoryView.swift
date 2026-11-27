@@ -261,8 +261,8 @@ private struct DayCell: View {
             if let snapshot {
                 let net = store.netWorth(snapshot)
                 Spacer(minLength: 0)
-                // 沒記錄、App 自己估的那天前面加走勢線圖示
-                ((isAuto ? Text("\(Image(systemName: "chart.line.uptrend.xyaxis")) ") : Text(""))
+                // 跟列表一樣：手動記錄前面加筆，App 自己估的加走勢線
+                (Text("\(Image(systemName: isAuto ? "chart.line.uptrend.xyaxis" : "pencil")) ").foregroundColor(.secondary)
                     + Text(store.hideAmounts ? "••" : Fmt.wan(net)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(isAuto ? Color.secondary : Color.primary)
