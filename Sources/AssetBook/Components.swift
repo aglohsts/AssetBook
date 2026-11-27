@@ -403,3 +403,8 @@ struct PrivacyToolbarButton: View {
         .help("隱藏所有金額（⇧⌘H）")
     }
 }
+
+extension Color {
+    /// 負債的顏色：淺薄荷綠，畫在「現金與存款」裡面（總覽的圓環、帳戶頁的比例條共用）
+    static let debt = Color(hue: 0.42, saturation: 0.28, brightness: 0.95)
+}

@@ -709,7 +709,7 @@ private struct CompositionCard: View {
     private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
     /// 負債的顏色：淺薄荷綠。跟現金同色系（紅配綠太衝），但比現金亮，
     /// 現金那塊變淡時（滑到負債）也看得清楚；深綠在深色背景和變淡的現金上都太不明顯
-    static let debtColor = Color(hue: 0.42, saturation: 0.28, brightness: 0.95)
+    static let debtColor = Color.debt
 
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {

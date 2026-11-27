@@ -575,6 +575,10 @@ private struct BalanceSummary: View {
         let parts = AssetCategory.allCases.filter { !$0.isLiability }
             .map { ($0, max(store.total($0, in: snapshot), 0)) }
             .filter { $0.1 > 0 }
+        // 跟總覽的圓環一樣：負債是現金要還掉的部分，畫在現金那段裡面；佔比以淨資產計（現金扣掉負債）
+        let cash = parts.first { $0.0 == .cash }?.1 ?? 0
+        let debtInCash = debt > 0 && cash > 0
+        let shareBase = debtInCash ? max(net, 1) : gross
 
         VStack(alignment: .leading, spacing: 20) {
             // 淨資產是主角；資產與負債是它的組成
@@ -606,6 +610,16 @@ private struct BalanceSummary: View {
                         ForEach(parts, id: \.0) { cat, v in
                             Rectangle().fill(cat.tint)
                                 .frame(width: max(geo.size.width * v / gross - 2, 2))
+                                .overlay(alignment: .leading) {
+                                    // 現金那段中間一條較細的線，長度是負債佔現金的比例
+                                    if cat == .cash, debtInCash {
+                                        GeometryReader { seg in
+                                            Capsule().fill(Color.debt)
+                                                .frame(width: max(seg.size.width * min(debt / v, 1), 2), height: 2)
+                                                .frame(maxHeight: .infinity)
+                                        }
+                                    }
+                                }
                         }
                     }
                     .clipShape(Capsule())
@@ -614,10 +628,20 @@ private struct BalanceSummary: View {
 
                 HStack(spacing: 16) {
                     ForEach(parts, id: \.0) { cat, v in
+                        let value = cat == .cash && debtInCash ? v - debt : v
                         HStack(spacing: 6) {
                             Circle().fill(cat.tint).frame(width: 6, height: 6)
                             Text(cat.title).foregroundStyle(.secondary)
-                            Text((v / gross).formatted(.percent.precision(.fractionLength(0))))
+                            Text((value / shareBase).formatted(.percent.precision(.fractionLength(0))))
+                                .monospacedDigit()
+                        }
+                        .lineLimit(1)
+                    }
+                    if debtInCash {
+                        HStack(spacing: 6) {
+                            Circle().fill(Color.debt).frame(width: 6, height: 6)
+                            Text("負債").foregroundStyle(.secondary)
+                            Text("佔現金 " + (debt / cash).formatted(.percent.precision(.fractionLength(0))))
                                 .monospacedDigit()
                         }
                         .lineLimit(1)
