@@ -607,17 +607,20 @@ private struct BalanceSummary: View {
                 // 資產分類比例
                 GeometryReader { geo in
                     HStack(spacing: 2) {
-                        // 現金拆兩段：扣完負債的現金，右邊接著同色變淡的負債；左邊都是正的、右邊是要還掉的
+                        // 現金那段的右邊接著負債（跟總覽圓環同一個淺薄荷綠），兩色中間不斷開；左邊都是正的、右邊是要還掉的
                         ForEach(parts, id: \.0) { cat, v in
                             let owed = cat == .cash && debtInCash ? min(debt, v) : 0
-                            if v - owed > 0 {
-                                Rectangle().fill(cat.tint)
-                                    .frame(width: max(geo.size.width * (v - owed) / gross - 2, 2))
-                            }
-                            if owed > 0 {
-                                Rectangle().fill(cat.tint.opacity(0.3))
-                                    .frame(width: max(geo.size.width * owed / gross - 2, 2))
-                            }
+                            Rectangle().fill(cat.tint)
+                                .overlay {
+                                    if owed > 0 {
+                                        GeometryReader { seg in
+                                            Rectangle().fill(Color.debt)
+                                                .frame(width: seg.size.width * owed / v)
+                                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                        }
+                                    }
+                                }
+                                .frame(width: max(geo.size.width * v / gross - 2, 2))
                         }
                     }
                     .clipShape(Capsule())
@@ -637,7 +640,7 @@ private struct BalanceSummary: View {
                     }
                     if debtInCash {
                         HStack(spacing: 6) {
-                            Circle().fill(AssetCategory.cash.tint.opacity(0.3)).frame(width: 6, height: 6)
+                            Circle().fill(Color.debt).frame(width: 6, height: 6)
                             Text("負債").foregroundStyle(.secondary)
                             Text("佔現金 " + (debt / cash).formatted(.percent.precision(.fractionLength(0))))
                                 .monospacedDigit()
