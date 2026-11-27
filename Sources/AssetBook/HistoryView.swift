@@ -335,12 +335,14 @@ struct SnapshotDetailView: View {
 
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        if store.isAuto(snapshot) {
-                            Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 22)).foregroundStyle(.secondary)
-                        }
+                    let auto = store.isAuto(snapshot)
+                    Text(auto ? "淨資產 · 估算" : "淨資產 · 紀錄").font(.subheadline).foregroundStyle(.secondary)
+                    // 跟總覽一樣：數字前面標出來源，筆＝手動記錄，走勢線＝用行情估的
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: auto ? "chart.line.uptrend.xyaxis" : "pencil")
+                            .font(.system(size: 20)).foregroundStyle(.secondary)
                         MoneyText(value: store.netWorth(snapshot))
+                            .foregroundStyle(auto ? Color.secondary : Color.primary)
                     }
                     .font(.system(size: 34, weight: .regular))
                     if let prev {
