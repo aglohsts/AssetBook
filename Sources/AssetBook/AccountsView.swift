@@ -607,19 +607,11 @@ private struct BalanceSummary: View {
                 // 資產分類比例
                 GeometryReader { geo in
                     HStack(spacing: 2) {
-                        // 現金那段的右邊接著負債（跟總覽圓環同一個淺薄荷綠），兩色中間不斷開；左邊都是正的、右邊是要還掉的
+                        // 現金那段的右邊漸漸淡成負債（跟總覽圓環同一個淺薄荷綠），沒有硬邊；左邊都是正的、右邊是要還掉的
                         ForEach(parts, id: \.0) { cat, v in
                             let owed = cat == .cash && debtInCash ? min(debt, v) : 0
-                            Rectangle().fill(cat.tint)
-                                .overlay {
-                                    if owed > 0 {
-                                        GeometryReader { seg in
-                                            Rectangle().fill(Color.debt)
-                                                .frame(width: seg.size.width * owed / v)
-                                                .frame(maxWidth: .infinity, alignment: .trailing)
-                                        }
-                                    }
-                                }
+                            Rectangle().fill(owed > 0 ? AnyShapeStyle(debtGradient(cat.tint, owedShare: owed / v))
+                                                      : AnyShapeStyle(cat.tint))
                                 .frame(width: max(geo.size.width * v / gross - 2, 2))
                         }
                     }
@@ -652,6 +644,18 @@ private struct BalanceSummary: View {
                 .font(.caption)
             }
         }
+    }
+
+    /// 現金 → 負債的漸層：交界前後各留一小段過渡，比例本身不變
+    private func debtGradient(_ cash: Color, owedShare: Double) -> LinearGradient {
+        let edge = 1 - min(max(owedShare, 0), 1)
+        let blend = 0.08
+        return LinearGradient(stops: [
+            .init(color: cash, location: 0),
+            .init(color: cash, location: max(edge - blend, 0)),
+            .init(color: .debt, location: min(edge + blend, 1)),
+            .init(color: .debt, location: 1),
+        ], startPoint: .leading, endPoint: .trailing)
     }
 
     private func part(_ title: String, _ value: Double, minus: Bool = false) -> some View {
