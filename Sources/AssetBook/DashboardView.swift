@@ -1105,7 +1105,7 @@ private struct UpcomingBillsCard: View {
                 Text("30 天內沒有").font(.caption).foregroundStyle(.tertiary).padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(events.prefix(6).enumerated()), id: \.element.id) { i, e in
+                    ForEach(Array(events.enumerated()), id: \.element.id) { i, e in
                         if i > 0 { Divider().opacity(0.6) }
                         row(e)
                     }
@@ -1171,6 +1171,9 @@ private struct UpcomingBillsCard: View {
                     Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
                 case .nothingDue?:
                     Label("本期沒有要繳的金額，不用處理", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+                case .notBilled(let d)?:
+                    Label("\(d.formatted(.dateTime.month(.defaultDigits).day())) 結帳後才知道金額", systemImage: "clock")
+                        .font(.caption).foregroundStyle(.secondary)
                 case .tasks(let tasks)?:
                     // 每個要繳的幣別一個勾：台幣「已設定預約轉帳」、外幣「已換匯日幣」等；不用繳的幣別不列
                     ForEach(tasks) { t in
@@ -1258,6 +1261,9 @@ private struct UpcomingBillsCard: View {
             }
         case .nothingDue?:
             Label("本期無需繳費", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+        case .notBilled(let d)?:
+            Label("\(d.formatted(.dateTime.month(.defaultDigits).day())) 結帳後才知道金額", systemImage: "clock")
+                .font(.caption).foregroundStyle(.secondary)
         case nil:
             EmptyView()
         }
@@ -1269,6 +1275,11 @@ private struct UpcomingBillsCard: View {
         if let until = t.scheduledUntil { parts.append("到 " + until.formatted(.dateTime.year().month(.defaultDigits).day())) }
         if let to = t.transferTo { parts.append("轉入 " + to) }
         return parts.isEmpty ? "" : "（" + parts.joined(separator: "・") + "）"
+    }
+
+    private func isNotBilled(_ e: BillEvent) -> Bool {
+        if case .notBilled? = store.paymentStatus(for: e) { return true }
+        return false
     }
 
     private func amountLine(_ a: Account, _ v: Double) -> some View {
@@ -1306,7 +1317,8 @@ private struct UpcomingBillsCard: View {
                 paymentStatusLabel(e, daysLeft: days)
             }
             Spacer(minLength: 8)
-            if e.kind == .due, !owed.isEmpty {
+            // 還沒結帳的那一期不顯示金額（紀錄裡的是上一期的帳單）
+            if e.kind == .due, !owed.isEmpty, !isNotBilled(e) {
                 // 每張卡各一行、分開繳，不合計：外幣寫原幣並附台幣換算，負數是退款
                 VStack(alignment: .trailing, spacing: 2) {
                     ForEach(owed, id: \.0.id) { a, v in
