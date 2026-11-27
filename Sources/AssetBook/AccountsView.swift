@@ -607,19 +607,17 @@ private struct BalanceSummary: View {
                 // 資產分類比例
                 GeometryReader { geo in
                     HStack(spacing: 2) {
+                        // 現金拆兩段：扣完負債的現金（綠），右邊接著負債（淺薄荷綠）；左邊都是正的、右邊是要扣掉的
                         ForEach(parts, id: \.0) { cat, v in
-                            Rectangle().fill(cat.tint)
-                                .frame(width: max(geo.size.width * v / gross - 2, 2))
-                                .overlay {
-                                    // 現金那段中間一條較細的線，長度是負債佔現金的比例；靠右放，左邊是正的、右邊是要扣掉的
-                                    if cat == .cash, debtInCash {
-                                        GeometryReader { seg in
-                                            Capsule().fill(Color.debt)
-                                                .frame(width: max(seg.size.width * min(debt / v, 1), 2), height: 2)
-                                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                                        }
-                                    }
-                                }
+                            let owed = cat == .cash && debtInCash ? min(debt, v) : 0
+                            if v - owed > 0 {
+                                Rectangle().fill(cat.tint)
+                                    .frame(width: max(geo.size.width * (v - owed) / gross - 2, 2))
+                            }
+                            if owed > 0 {
+                                Rectangle().fill(Color.debt)
+                                    .frame(width: max(geo.size.width * owed / gross - 2, 2))
+                            }
                         }
                     }
                     .clipShape(Capsule())
