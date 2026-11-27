@@ -121,10 +121,16 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                // 估算（拖到估算的那天，或「即時」＝最新紀錄 × 現在行情）：數字變灰，下一行標出走勢線圖示
+                // 數字前面標出來源：筆＝手動記錄，走勢線＝用行情估的（拖到估算的那天，或「即時」＝最新紀錄 × 現在行情），估算的數字變灰
                 let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
-                MoneyText(value: selected?.value ?? net)
-                .foregroundStyle(isEstimate ? Color.secondary : Color.primary)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: isEstimate ? "chart.line.uptrend.xyaxis" : "pencil")
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .help(isEstimate ? "估算：餘額沿用最近一次記錄，股價和匯率用最新的" : "手動記錄")
+                    MoneyText(value: selected?.value ?? net)
+                        .foregroundStyle(isEstimate ? Color.secondary : Color.primary)
+                }
                 .font(.system(size: 48, weight: .regular))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
@@ -210,15 +216,14 @@ private struct NetWorthCard: View {
 
     // MARK: 狀態
 
-    /// 上面那行：標出大數字是哪一天、從哪來（筆＝手動記錄，走勢線＝用行情估的），拖曳時跟著選到的那天變
+    /// 上面那行：大數字是哪一天的紀錄或估算，拖曳時跟著選到的那天變
     @ViewBuilder private func status(_ selected: Point?) -> some View {
         Group {
             if let selected, !selected.isLive {
                 let day = selected.date.formatted(.dateTime.month(.defaultDigits).day())
-                Label(selected.isAuto ? "淨資產 · \(day) 估算" : "淨資產 · \(day) 紀錄",
-                      systemImage: selected.isAuto ? "chart.line.uptrend.xyaxis" : "pencil")
+                Text(selected.isAuto ? "淨資產 · \(day) 估算" : "淨資產 · \(day) 紀錄")
             } else if mode == .record {
-                Label("淨資產 · \(record.date.formatted(.dateTime.month(.defaultDigits).day())) 紀錄", systemImage: "pencil")
+                Text("淨資產 · \(record.date.formatted(.dateTime.month(.defaultDigits).day())) 紀錄")
             } else {
                 switch store.liveStatus {
                 case .loading where store.liveUpdatedAt == nil:
@@ -230,7 +235,7 @@ private struct NetWorthCard: View {
                     Label {
                         Text("淨資產 · 即時估算 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened)) · 餘額沿用 \(record.date.formatted(.dateTime.month(.defaultDigits).day()))")
                     } icon: {
-                        Image(systemName: "chart.line.uptrend.xyaxis")
+                        Circle().fill(.green).frame(width: 7, height: 7)
                     }
                 }
             }
