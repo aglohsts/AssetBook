@@ -121,26 +121,25 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                // 估算的數字前面加虛線圓圈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
+                // 估算（拖到估算的那天，或「即時」＝最新紀錄 × 現在行情）：數字變灰，下一行標出走勢線圖示
                 let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if isEstimate {
-                        Image(systemName: "circle.dashed")
-                            .font(.system(size: 26, weight: .regular))
-                            .foregroundStyle(.secondary)
-                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
-                    }
-                    MoneyText(value: selected?.value ?? net)
-                }
+                MoneyText(value: selected?.value ?? net)
+                .foregroundStyle(isEstimate ? Color.secondary : Color.primary)
                 .font(.system(size: 48, weight: .regular))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 HStack(spacing: 8) {
+                    if isEstimate {
+                        // 跟歷史紀錄列表同一個圖示：走勢線＝用行情估的，不是手動記錄
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .foregroundStyle(.secondary)
+                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
+                    }
                     if let selected, let first = pts.first {
                         // 拖曳中：和區間起點比較
                         DeltaBadge(delta: selected.value - first.value, base: first.value)
                         Text(selected.isLive ? "即時估算 vs 區間起點"
-                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day()))\(selected.isAuto ? " 估算" : "") vs 區間起點")
+                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day())) vs 區間起點")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     } else if let comparison {

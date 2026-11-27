@@ -341,7 +341,7 @@ struct SettingsView: View {
             } header: {
                 Text("報價")
             } footer: {
-                Text("\(Image(systemName: "circle.dashed")) 估算：沒記錄的日子，餘額沿用最近一次記錄，股價和匯率用當天的。只出現在走勢圖和月曆，不影響紀錄、比較與匯出；那天記錄後就會取代它。\n匯率、幣價與股價：Yahoo Finance，無法連線時改用 ExchangeRate-API、CoinGecko、證交所、CNBC。只會下載報價，不會送出任何個人資料。")
+                Text("\(Image(systemName: "chart.line.uptrend.xyaxis")) 估算：沒記錄的日子，餘額沿用最近一次記錄，股價和匯率用當天的。只出現在走勢圖和歷史紀錄，不影響紀錄、比較與匯出；那天記錄後就會取代它。\n匯率、幣價與股價：Yahoo Finance，無法連線時改用 ExchangeRate-API、CoinGecko、證交所、CNBC。只會下載報價，不會送出任何個人資料。")
             }
 
             Section {
