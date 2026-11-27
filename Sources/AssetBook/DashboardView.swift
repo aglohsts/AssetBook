@@ -109,7 +109,7 @@ private struct NetWorthCard: View {
 
         Card {
             HStack(alignment: .center) {
-                status
+                status(selected)
                 Spacer()
                 Picker("顯示", selection: $mode) {
                     Text("即時").tag(ValueMode.live)
@@ -129,10 +129,6 @@ private struct NetWorthCard: View {
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 HStack(spacing: 8) {
-                    // 跟歷史紀錄列表、日曆同一組圖示：筆＝手動記錄，走勢線＝用行情估的
-                    Image(systemName: isEstimate ? "chart.line.uptrend.xyaxis" : "pencil")
-                        .foregroundStyle(.secondary)
-                        .help(isEstimate ? "估算：餘額沿用最近一次記錄，股價和匯率用最新的" : "手動記錄")
                     if let selected, let first = pts.first {
                         // 拖曳中：和區間起點比較
                         DeltaBadge(delta: selected.value - first.value, base: first.value)
@@ -214,10 +210,15 @@ private struct NetWorthCard: View {
 
     // MARK: 狀態
 
-    @ViewBuilder private var status: some View {
+    /// 上面那行：標出大數字是哪一天、從哪來（筆＝手動記錄，走勢線＝用行情估的），拖曳時跟著選到的那天變
+    @ViewBuilder private func status(_ selected: Point?) -> some View {
         Group {
-            if mode == .record {
-                Label("淨資產 · 紀錄", systemImage: "tray.full")
+            if let selected, !selected.isLive {
+                let day = selected.date.formatted(.dateTime.month(.defaultDigits).day())
+                Label(selected.isAuto ? "淨資產 · \(day) 估算" : "淨資產 · \(day) 紀錄",
+                      systemImage: selected.isAuto ? "chart.line.uptrend.xyaxis" : "pencil")
+            } else if mode == .record {
+                Label("淨資產 · \(record.date.formatted(.dateTime.month(.defaultDigits).day())) 紀錄", systemImage: "pencil")
             } else {
                 switch store.liveStatus {
                 case .loading where store.liveUpdatedAt == nil:
@@ -229,7 +230,7 @@ private struct NetWorthCard: View {
                     Label {
                         Text("淨資產 · 即時估算 \((store.liveUpdatedAt ?? .now).formatted(date: .omitted, time: .shortened)) · 餘額沿用 \(record.date.formatted(.dateTime.month(.defaultDigits).day()))")
                     } icon: {
-                        Circle().fill(.green).frame(width: 7, height: 7)
+                        Image(systemName: "chart.line.uptrend.xyaxis")
                     }
                 }
             }
