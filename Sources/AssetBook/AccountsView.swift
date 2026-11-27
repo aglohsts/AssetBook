@@ -398,8 +398,9 @@ private struct CategoryOverview: View {
         let total = store.total(category, in: snapshot)
         let gross = store.grossAssets(snapshot)
         let count = store.activeAccounts(in: category).count
+            // 負債的合計包含卡費、未出帳與貸款餘額，是總額而不是本期要繳的錢
         VStack(alignment: .leading, spacing: 8) {
-            Label(category.isLiability ? "本期應繳合計" : category.title, systemImage: category.symbol)
+            Label(category.isLiability ? "負債總額" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
             CategoryTotalText(category: category, total: total)
