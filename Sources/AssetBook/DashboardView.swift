@@ -17,8 +17,8 @@ struct DashboardView: View {
                 VStack(spacing: 16) {
                     NetWorthCard(snapshot: current, record: latest, comparison: comparison, mode: $mode)
                     StatStrip(snapshot: current)
-                    UpcomingBillsCard(record: latest)
                     CompositionCard(snapshot: current, previous: comparison, tab: $tab)
+                    UpcomingBillsCard(record: latest)
                     MarketCard(snapshot: current, previous: comparison)
                 }
                 .padding()
