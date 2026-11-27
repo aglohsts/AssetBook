@@ -418,6 +418,14 @@ final class PortfolioStore {
             return .tasks([PaymentTask(currency: a.currency, done: done, scheduledUntil: until,
                                        transferTo: a.paymentAccountID.flatMap { account(id: $0)?.name })])
         }
+        // 繳費日前還會結帳一次（例如下個月的繳費日）：帳單還沒出來，不能拿這期的金額判斷
+        let today = cal.startOfDay(for: .now)
+        let ids = Set(group.map(\.id))
+        if let days = cal.dateComponents([.day], from: today, to: event.date).day, days > 0,
+           let statement = billEvents(from: today, within: days)
+               .first(where: { $0.kind == .statement && $0.date < event.date && $0.accounts.contains { ids.contains($0.id) } }) {
+            return .notBilled(statement.date)
+        }
         // 最近一筆紀錄裡有要繳的卡（0、留空或退款的不用處理）
         let owing = group.filter { (latest?.amounts[$0.id] ?? 0) > 0 }
         if owing.isEmpty { return .nothingDue }

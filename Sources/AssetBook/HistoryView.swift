@@ -191,19 +191,26 @@ struct HistoryView: View {
 
     private var listView: some View {
         List {
-            ForEach(store.snapshots.reversed()) { s in
+            // 手動紀錄和自動估值點一起列出，日期下方用筆／走勢線圖示分開
+            ForEach(store.chartSnapshots.reversed()) { s in
+                let auto = store.isAuto(s)
                 NavigationLink(value: s) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(s.date.formatted(.dateTime.year().month().day()))
                                 .font(.body.weight(.medium))
-                            Text(s.date.formatted(.relative(presentation: .named)))
+                            // 日期下方標出這天的來源：筆＝手動記錄，走勢線＝App 用當天行情估的
+                            (Text(s.date.formatted(.relative(presentation: .named))) + Text(" · ")
+                                + Text(Image(systemName: auto ? "chart.line.uptrend.xyaxis" : "pencil")))
                                 .font(.caption).foregroundStyle(.secondary)
+                                .help(auto ? "估算：餘額沿用最近一次記錄，行情用當天的" : "手動記錄")
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
                             let net = store.netWorth(s)
-                            MoneyText(value: net).font(.body.weight(.medium))
+                            MoneyText(value: net)
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(auto ? Color.secondary : Color.primary)
                             if let prev = store.snapshot(before: s) {
                                 let old = store.netWorth(prev)
                                 DeltaText(delta: net - old, base: old).font(.caption)
@@ -213,10 +220,18 @@ struct HistoryView: View {
                     .padding(.vertical, 2)
                 }
                 .swipeActions {
-                    Button("刪除", systemImage: "trash", role: .destructive) { pendingDelete = s }
+                    if auto {
+                        Button("刪除估算", systemImage: "trash", role: .destructive) { store.deleteAuto(s) }
+                    } else {
+                        Button("刪除", systemImage: "trash", role: .destructive) { pendingDelete = s }
+                    }
                 }
                 .contextMenu {
-                    Button("刪除紀錄", systemImage: "trash", role: .destructive) { pendingDelete = s }
+                    if auto {
+                        Button("刪除估算", systemImage: "trash", role: .destructive) { store.deleteAuto(s) }
+                    } else {
+                        Button("刪除紀錄", systemImage: "trash", role: .destructive) { pendingDelete = s }
+                    }
                 }
             }
         }
@@ -229,7 +244,7 @@ private struct DayCell: View {
     let day: Date
     let snapshot: Snapshot?
     let previous: Snapshot?
-    /// 估算（自動估值點）：數字前加虛線圓圈、虛線框
+    /// 估算（自動估值點）：數字前加走勢線圖示、格子不上底色
     var isAuto = false
     /// 這天的結帳日、繳費日
     var bills: [BillEvent] = []
@@ -246,8 +261,8 @@ private struct DayCell: View {
             if let snapshot {
                 let net = store.netWorth(snapshot)
                 Spacer(minLength: 0)
-                // 沒記錄、App 自己估的那天前面加虛線圓圈
-                ((isAuto ? Text("\(Image(systemName: "circle.dashed")) ") : Text(""))
+                // 跟列表一樣：手動記錄前面加筆，App 自己估的加走勢線
+                (Text("\(Image(systemName: isAuto ? "chart.line.uptrend.xyaxis" : "pencil")) ").foregroundColor(.secondary)
                     + Text(store.hideAmounts ? "••" : Fmt.wan(net)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(isAuto ? Color.secondary : Color.primary)
@@ -282,13 +297,6 @@ private struct DayCell: View {
         .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
         .background(snapshot == nil || isAuto ? Color.clear : Color.primary.opacity(0.05),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            // 估算的那天用虛線框，跟有記錄的實心格子分開
-            if isAuto {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-            }
-        }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
@@ -330,7 +338,7 @@ struct SnapshotDetailView: View {
                     Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         if store.isAuto(snapshot) {
-                            Image(systemName: "circle.dashed").font(.system(size: 22)).foregroundStyle(.secondary)
+                            Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 22)).foregroundStyle(.secondary)
                         }
                         MoneyText(value: store.netWorth(snapshot))
                     }
@@ -367,7 +375,11 @@ struct SnapshotDetailView: View {
                     HStack {
                         Text(cat.title)
                         Spacer()
-                        MoneyText(value: store.total(cat, in: snapshot))
+                        if cat.isLiability {
+                            OwedAmount(owed: -store.total(cat, in: snapshot))
+                        } else {
+                            MoneyText(value: store.total(cat, in: snapshot))
+                        }
                     }
                 }
             }
@@ -425,7 +437,7 @@ struct SnapshotDetailView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         } icon: {
-            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
+            Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.secondary)
         }
     }
 

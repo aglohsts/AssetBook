@@ -121,26 +121,25 @@ private struct NetWorthCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                // 估算的數字前面加虛線圓圈：拖到估算的那天，或「即時」（最新紀錄 × 現在行情）
+                // 估算（拖到估算的那天，或「即時」＝最新紀錄 × 現在行情）：數字變灰，下一行標出走勢線圖示
                 let isEstimate = selected.map { $0.isAuto || $0.isLive } ?? (mode == .live && store.liveSnapshot != nil)
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if isEstimate {
-                        Image(systemName: "circle.dashed")
-                            .font(.system(size: 26, weight: .regular))
-                            .foregroundStyle(.secondary)
-                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
-                    }
-                    MoneyText(value: selected?.value ?? net)
-                }
+                MoneyText(value: selected?.value ?? net)
+                .foregroundStyle(isEstimate ? Color.secondary : Color.primary)
                 .font(.system(size: 48, weight: .regular))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 HStack(spacing: 8) {
+                    if isEstimate {
+                        // 跟歷史紀錄列表同一個圖示：走勢線＝用行情估的，不是手動記錄
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .foregroundStyle(.secondary)
+                            .help("估算：餘額沿用最近一次記錄，股價和匯率用最新的")
+                    }
                     if let selected, let first = pts.first {
                         // 拖曳中：和區間起點比較
                         DeltaBadge(delta: selected.value - first.value, base: first.value)
                         Text(selected.isLive ? "即時估算 vs 區間起點"
-                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day()))\(selected.isAuto ? " 估算" : "") vs 區間起點")
+                             : "\(selected.date.formatted(.dateTime.year().month(.defaultDigits).day())) vs 區間起點")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     } else if let comparison {
@@ -390,7 +389,7 @@ private struct StatStrip: View {
             Text("\(store.activeAccounts.filter { !$0.category.isLiability }.count) 個帳戶")
         }
         let liabilities = tile("負債") {
-            MoneyText(value: debt)
+            OwedAmount(owed: debt)
         } footer: {
             Text(gross > 0 ? "佔總資產 \((debt / gross).formatted(.percent.precision(.fractionLength(1))))" : "—")
         }
@@ -710,7 +709,7 @@ private struct CompositionCard: View {
     private var debtSourceID: String { grouping == .category ? AssetCategory.cash.rawValue : Currency.twd.rawValue }
     /// 負債的顏色：淺薄荷綠。跟現金同色系（紅配綠太衝），但比現金亮，
     /// 現金那塊變淡時（滑到負債）也看得清楚；深綠在深色背景和變淡的現金上都太不明顯
-    static let debtColor = Color(hue: 0.42, saturation: 0.28, brightness: 0.95)
+    static let debtColor = Color.debt
 
 
     private func legendRow(_ p: Part, share: Double, isDeduction: Bool = false) -> some View {
@@ -1046,7 +1045,14 @@ private struct UpcomingBillsCard: View {
     @Environment(\.portfolio) private var store
     let record: Snapshot
 
-    private var events: [BillEvent] { store.billEvents(from: .now, within: 30) }
+    /// 每張卡（同銀行共用日期的算一組）的繳費、結帳各只列最近一次：這期過了才出現下一期。日曆另外列出全部日期
+    private var events: [BillEvent] {
+        var seen = Set<String>()
+        return store.billEvents(from: .now, within: 30).filter { e in
+            let key = "\(e.kind)-" + e.accounts.map(\.id.uuidString).sorted().joined(separator: ",")
+            return seen.insert(key).inserted
+        }
+    }
 
     @State private var editing: BillEvent?
     @State private var draftDate = Date.now
@@ -1106,7 +1112,7 @@ private struct UpcomingBillsCard: View {
                 Text("30 天內沒有").font(.caption).foregroundStyle(.tertiary).padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(events.prefix(6).enumerated()), id: \.element.id) { i, e in
+                    ForEach(Array(events.enumerated()), id: \.element.id) { i, e in
                         if i > 0 { Divider().opacity(0.6) }
                         row(e)
                     }
@@ -1172,6 +1178,9 @@ private struct UpcomingBillsCard: View {
                     Label("自動扣款，不用另外轉帳", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
                 case .nothingDue?:
                     Label("本期沒有要繳的金額，不用處理", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+                case .notBilled(let d)?:
+                    Label("\(d.formatted(.dateTime.month(.defaultDigits).day())) 結帳後才知道金額", systemImage: "clock")
+                        .font(.caption).foregroundStyle(.secondary)
                 case .tasks(let tasks)?:
                     // 每個要繳的幣別一個勾：台幣「已設定預約轉帳」、外幣「已換匯日幣」等；不用繳的幣別不列
                     ForEach(tasks) { t in
@@ -1259,6 +1268,9 @@ private struct UpcomingBillsCard: View {
             }
         case .nothingDue?:
             Label("本期無需繳費", systemImage: "minus.circle").font(.caption).foregroundStyle(.secondary)
+        case .notBilled(let d)?:
+            Label("\(d.formatted(.dateTime.month(.defaultDigits).day())) 結帳後才知道金額", systemImage: "clock")
+                .font(.caption).foregroundStyle(.secondary)
         case nil:
             EmptyView()
         }
@@ -1272,9 +1284,14 @@ private struct UpcomingBillsCard: View {
         return parts.isEmpty ? "" : "（" + parts.joined(separator: "・") + "）"
     }
 
+    private func isNotBilled(_ e: BillEvent) -> Bool {
+        if case .notBilled? = store.paymentStatus(for: e) { return true }
+        return false
+    }
+
     private func amountLine(_ a: Account, _ v: Double) -> some View {
         HStack(spacing: 4) {
-            if v < 0 { Text("退款").font(.caption).foregroundStyle(.green) }
+            if v < 0 { RefundTag() }
             if store.hideAmounts {
                 Text("••••").font(.subheadline)
             } else {
@@ -1307,7 +1324,8 @@ private struct UpcomingBillsCard: View {
                 paymentStatusLabel(e, daysLeft: days)
             }
             Spacer(minLength: 8)
-            if e.kind == .due, !owed.isEmpty {
+            // 還沒結帳的那一期不顯示金額（紀錄裡的是上一期的帳單）
+            if e.kind == .due, !owed.isEmpty, !isNotBilled(e) {
                 // 每張卡各一行、分開繳，不合計：外幣寫原幣並附台幣換算，負數是退款
                 VStack(alignment: .trailing, spacing: 2) {
                     ForEach(owed, id: \.0.id) { a, v in

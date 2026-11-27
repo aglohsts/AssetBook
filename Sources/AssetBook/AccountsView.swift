@@ -358,7 +358,7 @@ private struct CategorySummaryRow: View {
             HStack(spacing: 0) {
                 title
                 Spacer(minLength: 8)
-                MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
+                CategoryTotalText(category: category, total: total).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
                 share.font(.callout).monospacedDigit().frame(width: 64, alignment: .trailing)
                 change.font(.callout).monospacedDigit().frame(width: 110, alignment: .trailing)
                 Image(systemName: "chevron.right")
@@ -370,7 +370,7 @@ private struct CategorySummaryRow: View {
                 title
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
-                    MoneyText(value: category.isLiability ? -total : total).font(.system(size: 17))
+                    CategoryTotalText(category: category, total: total).font(.system(size: 17))
                     HStack(spacing: 8) {
                         if !category.isLiability, gross > 0 { share }
                         change
@@ -398,11 +398,12 @@ private struct CategoryOverview: View {
         let total = store.total(category, in: snapshot)
         let gross = store.grossAssets(snapshot)
         let count = store.activeAccounts(in: category).count
+            // 負債的合計包含卡費、未出帳與貸款餘額，是總額而不是本期要繳的錢
         VStack(alignment: .leading, spacing: 8) {
-            Label(category.isLiability ? "本期應繳合計" : category.title, systemImage: category.symbol)
+            Label(category.isLiability ? "負債總額" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
-            MoneyText(value: category.isLiability ? -total : total)
+            CategoryTotalText(category: category, total: total)
                 .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
@@ -491,11 +492,25 @@ private struct LiabilityGroupRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-                MoneyText(value: owed).font(.title3.weight(.semibold))
+                OwedAmount(owed: owed).font(.title3.weight(.semibold))
                 if let old { LiabilityChange(now: owed, before: old).font(.caption) }
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+/// 分類合計：負債顯示要繳的正數，退款用「退款」標籤（跟帳戶列一致）
+private struct CategoryTotalText: View {
+    let category: AssetCategory
+    let total: Double
+
+    var body: some View {
+        if category.isLiability {
+            OwedAmount(owed: -total)
+        } else {
+            MoneyText(value: total)
+        }
     }
 }
 
@@ -560,6 +575,10 @@ private struct BalanceSummary: View {
         let parts = AssetCategory.allCases.filter { !$0.isLiability }
             .map { ($0, max(store.total($0, in: snapshot), 0)) }
             .filter { $0.1 > 0 }
+        // 跟總覽的圓環一樣：負債是現金要還掉的部分，畫在現金那段裡面；佔比以淨資產計（現金扣掉負債）
+        let cash = parts.first { $0.0 == .cash }?.1 ?? 0
+        let debtInCash = debt > 0 && cash > 0
+        let shareBase = debtInCash ? max(net, 1) : gross
 
         VStack(alignment: .leading, spacing: 20) {
             // 淨資產是主角；資產與負債是它的組成
@@ -588,8 +607,11 @@ private struct BalanceSummary: View {
                 // 資產分類比例
                 GeometryReader { geo in
                     HStack(spacing: 2) {
+                        // 現金那段的右邊漸漸淡成負債（跟總覽圓環同一個淺薄荷綠），沒有硬邊；左邊都是正的、右邊是要還掉的
                         ForEach(parts, id: \.0) { cat, v in
-                            Rectangle().fill(cat.tint)
+                            let owed = cat == .cash && debtInCash ? min(debt, v) : 0
+                            Rectangle().fill(owed > 0 ? AnyShapeStyle(debtGradient(cat.tint, owedShare: owed / v))
+                                                      : AnyShapeStyle(cat.tint))
                                 .frame(width: max(geo.size.width * v / gross - 2, 2))
                         }
                     }
@@ -599,10 +621,20 @@ private struct BalanceSummary: View {
 
                 HStack(spacing: 16) {
                     ForEach(parts, id: \.0) { cat, v in
+                        let value = cat == .cash && debtInCash ? v - debt : v
                         HStack(spacing: 6) {
                             Circle().fill(cat.tint).frame(width: 6, height: 6)
                             Text(cat.title).foregroundStyle(.secondary)
-                            Text((v / gross).formatted(.percent.precision(.fractionLength(0))))
+                            Text((value / shareBase).formatted(.percent.precision(.fractionLength(0))))
+                                .monospacedDigit()
+                        }
+                        .lineLimit(1)
+                    }
+                    if debtInCash {
+                        HStack(spacing: 6) {
+                            Circle().fill(Color.debt).frame(width: 6, height: 6)
+                            Text("負債").foregroundStyle(.secondary)
+                            Text("佔現金 " + (debt / cash).formatted(.percent.precision(.fractionLength(0))))
                                 .monospacedDigit()
                         }
                         .lineLimit(1)
@@ -612,6 +644,18 @@ private struct BalanceSummary: View {
                 .font(.caption)
             }
         }
+    }
+
+    /// 現金 → 負債的漸層：交界前後各留一小段過渡，比例本身不變
+    private func debtGradient(_ cash: Color, owedShare: Double) -> LinearGradient {
+        let edge = 1 - min(max(owedShare, 0), 1)
+        let blend = 0.08
+        return LinearGradient(stops: [
+            .init(color: cash, location: 0),
+            .init(color: cash, location: max(edge - blend, 0)),
+            .init(color: .debt, location: min(edge + blend, 1)),
+            .init(color: .debt, location: 1),
+        ], startPoint: .leading, endPoint: .trailing)
     }
 
     private func part(_ title: String, _ value: Double, minus: Bool = false) -> some View {
@@ -659,20 +703,15 @@ struct AccountRow: View {
                 if account.category.isLiability && !hasAmount {
                     Text("本期無帳單").foregroundStyle(.secondary)
                 } else {
-                    // 負債顯示為正的應繳金額，比較直覺；負數代表有退款（溢繳），標成「退款」
-                    if nested {
+                    // 負債顯示為正的應繳金額；退款（溢繳）用「退款」標籤，跟其他地方一致
+                    if account.category.isLiability {
+                        OwedAmount(owed: -value)
+                            .font(nested ? .subheadline : .body.weight(.medium))
+                            .foregroundStyle(nested ? .secondary : .primary)
+                    } else if nested {
                         MoneyText(value: value).font(.subheadline).foregroundStyle(.secondary)
-                    } else if account.category.isLiability && value > 0 {
-                        HStack(spacing: 6) {
-                            Text("退款").font(.caption.weight(.medium))
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.green.opacity(0.15), in: Capsule())
-                                .foregroundStyle(.green)
-                            MoneyText(value: value).fontWeight(.medium)
-                        }
                     } else {
-                        MoneyText(value: account.category.isLiability ? -value : value)
-                            .fontWeight(.medium)
+                        MoneyText(value: value).fontWeight(.medium)
                     }
                 }
                 change.font(.caption)

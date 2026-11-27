@@ -403,6 +403,8 @@ enum PaymentStatus: Equatable {
     case autoDebit
     /// 本期沒有要繳的金額（0、留空或退款），不用處理
     case nothingDue
+    /// 這次繳費日之前還有一次結帳：帳單還沒出來，最近一筆紀錄的金額是上一期的，不用處理
+    case notBilled(Date)
     /// 要處理的事（每個幣別一件），各自完成或還沒
     case tasks([PaymentTask])
 
