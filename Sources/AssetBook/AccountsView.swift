@@ -72,7 +72,12 @@ struct AccountsView: View {
             }
 
             if let latest = store.latest, let cat = filter.category {
-                categoryPage(cat, latest: latest, prev: store.snapshot(before: latest))
+                // 和「全部」一樣跟著即時報價：股票、加密貨幣看股價，外幣現金與負債看匯率
+                if let live = store.liveSnapshot {
+                    categoryPage(cat, latest: live, prev: latest)
+                } else {
+                    categoryPage(cat, latest: latest, prev: store.snapshot(before: latest))
+                }
             }
         }
         #if os(iOS)
@@ -408,8 +413,14 @@ private struct CategoryOverview: View {
             Label(category.isLiability ? "負債總額" : category.title, systemImage: category.symbol)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
-            CategoryTotalText(category: category, total: total)
-                .font(.system(size: 32, weight: .regular))
+            let isLive = snapshot.id == PortfolioStore.liveSnapshotID
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: isLive ? "chart.line.uptrend.xyaxis" : "pencil")
+                    .font(.system(size: 18, weight: .regular)).foregroundStyle(.secondary)
+                    .help(isLive ? "即時估算 \(snapshot.date.formatted(date: .omitted, time: .shortened))：餘額沿用最近一次記錄，股價和匯率用最新的" : "手動記錄")
+                CategoryTotalText(category: category, total: total)
+            }
+            .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
                     let old = store.total(category, in: previous)
