@@ -610,13 +610,13 @@ private struct BalanceSummary: View {
                         ForEach(parts, id: \.0) { cat, v in
                             Rectangle().fill(cat.tint)
                                 .frame(width: max(geo.size.width * v / gross - 2, 2))
-                                .overlay(alignment: .leading) {
-                                    // 現金那段中間一條較細的線，長度是負債佔現金的比例
+                                .overlay {
+                                    // 現金那段中間一條較細的線，長度是負債佔現金的比例；靠右放，左邊是正的、右邊是要扣掉的
                                     if cat == .cash, debtInCash {
                                         GeometryReader { seg in
                                             Capsule().fill(Color.debt)
                                                 .frame(width: max(seg.size.width * min(debt / v, 1), 2), height: 2)
-                                                .frame(maxHeight: .infinity)
+                                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                                         }
                                     }
                                 }
