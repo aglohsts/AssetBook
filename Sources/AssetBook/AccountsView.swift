@@ -19,7 +19,12 @@ struct AccountsView: View {
     var body: some View {
         Group {
             if filter.category == nil, let latest = store.latest {
-                overviewScroll(latest: latest, prev: store.snapshot(before: latest))
+                // 跟總覽的即時模式一樣：最新紀錄 × 現在的報價，和最新紀錄比較；沒有報價時用紀錄本身
+                if let live = store.liveSnapshot {
+                    overviewScroll(latest: live, prev: latest)
+                } else {
+                    overviewScroll(latest: latest, prev: store.snapshot(before: latest))
+                }
             } else {
                 categoryList
             }
@@ -583,11 +588,20 @@ private struct BalanceSummary: View {
         VStack(alignment: .leading, spacing: 20) {
             // 淨資產是主角；資產與負債是它的組成
             VStack(alignment: .leading, spacing: 6) {
-                Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
-                MoneyText(value: net)
-                    .font(.system(size: 36, weight: .regular))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                let isLive = snapshot.id == PortfolioStore.liveSnapshotID
+                Text(isLive
+                     ? "淨資產 · 即時估算 \(snapshot.date.formatted(date: .omitted, time: .shortened))"
+                     : "淨資產 · \(snapshot.date.formatted(.dateTime.month(.defaultDigits).day())) 紀錄")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: isLive ? "chart.line.uptrend.xyaxis" : "pencil")
+                        .font(.system(size: 20, weight: .regular)).foregroundStyle(.secondary)
+                    MoneyText(value: net)
+                        .foregroundStyle(isLive ? Color.secondary : Color.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+                .font(.system(size: 36, weight: .regular))
                 if let previous {
                     let old = store.netWorth(previous)
                     HStack(spacing: 8) {
