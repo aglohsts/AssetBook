@@ -1045,7 +1045,14 @@ private struct UpcomingBillsCard: View {
     @Environment(\.portfolio) private var store
     let record: Snapshot
 
-    private var events: [BillEvent] { store.billEvents(from: .now, within: 30) }
+    /// 每張卡（同銀行共用日期的算一組）的繳費、結帳各只列最近一次：這期過了才出現下一期。日曆另外列出全部日期
+    private var events: [BillEvent] {
+        var seen = Set<String>()
+        return store.billEvents(from: .now, within: 30).filter { e in
+            let key = "\(e.kind)-" + e.accounts.map(\.id.uuidString).sorted().joined(separator: ",")
+            return seen.insert(key).inserted
+        }
+    }
 
     @State private var editing: BillEvent?
     @State private var draftDate = Date.now
